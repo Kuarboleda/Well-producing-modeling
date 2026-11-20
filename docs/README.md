@@ -20,9 +20,11 @@ replaces it yet.
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
 | `vlp.js` | translation of `vlp.py`, **in progress**: friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros |
-| `units.js` | the one place where psig (what you type) meets psia (what the engine uses) |
+| `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
 | `tools/dump_pvt.py`, `tools/dump_ipr.py` | run the PYTHON engine over thousands of cases and save the answers |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
+| `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
+| `tools/test_page_units.mjs` | drives the real page in a real browser and checks that switching system does not change the well |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
 cross-checked before the next begins:
@@ -92,8 +94,18 @@ most in a file full of numbers.
 
 * **Pressure.** The engine works in psia throughout, exactly like the Python. Everything you see and
   type is psig. `units.js` is the only crossing point.
-* **Metric units.** Not offered yet, but `units.js` already holds the conversions, so turning them on
-  later is a change in one file rather than in every file.
+* **Two unit systems**, oilfield (the default) and metric, chosen from the box at the top right. The
+  engine never learns that metric exists: it is always handed oilfield units and absolute pressure,
+  so it stays line for line the same calculation as the Python. Everything the screen shows or reads
+  passes through `units.js`.
+* **Switching system does not change the well.** Every number already typed is re-expressed, so
+  3,000 psig becomes 206.843 barg. The number you *typed* is also remembered, so switching back
+  gives 3,000 again and not 2,999.996 - flipping between systems any number of times cannot walk the
+  well away from what was entered.
+* **The back-pressure coefficient C** is the one unit that cannot be written down in advance, because
+  the exponent n sits inside it: q = C (Pr² − Pwf²)ⁿ, so C is measured in rate per pressure-squared
+  to the power n. It is converted with n rather than from a table, and its label is written out in
+  full next to the box.
 * **AOF** is quoted at zero *absolute* pressure, the convention the Python uses and the one the inflow
   models were checked against. On the chart the axis starts at zero gauge, so the small tail below it
   is simply not drawn.

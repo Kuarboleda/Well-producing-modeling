@@ -43,6 +43,8 @@
   header .sub { color: var(--ink-soft); font-size: 13px; }
   header .spacer { flex: 1 1 auto; }
   header button { font-size: 13px; }
+  header .units { font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; margin: 0; }
+  header .units select { width: auto; margin: 0; padding: 5px 8px; font-size: 13px; color: var(--ink); }
 
   .layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
   .panel {
@@ -106,6 +108,12 @@
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Inflow performance &mdash; early version</span>
   <span class="spacer"></span>
+  <label class="units">Units
+    <select id="unit_system">
+      <option value="field">Oilfield</option>
+      <option value="metric">Metric</option>
+    </select>
+  </label>
   <button id="btn-save">Save case</button>
   <button id="btn-open">Open case</button>
   <input type="file" id="file-open" accept=".json" class="hidden">
@@ -192,7 +200,7 @@
 
       <div id="f-darcy">
         <div class="row">
-          <label>Permeability k <span class="u">md</span>
+          <label>Permeability k <span class="u" data-unit="permeability"></span>
             <input type="number" id="oil_k" value="50" step="5" min="0.0001">
           </label>
           <label>Net thickness h <span class="u" data-unit="length"></span>
@@ -200,10 +208,10 @@
           </label>
         </div>
         <div class="row">
-          <label>Bo <span class="u">rb/STB</span>
+          <label>Bo <span class="u" data-unit="fvf"></span>
             <input type="number" id="oil_bo" value="1.25" step="0.01" min="0.0001">
           </label>
-          <label>Oil viscosity <span class="u">cP</span>
+          <label>Oil viscosity <span class="u" data-unit="viscosity"></span>
             <input type="number" id="oil_mu" value="0.8" step="0.1" min="0.0001">
           </label>
         </div>
@@ -226,13 +234,13 @@
           </select>
         </label>
         <div id="f-transient" class="row">
-          <label>Porosity
+          <label>Porosity <span class="u" data-unit="fraction"></span>
             <input type="number" id="oil_phi" value="0.2" step="0.01" min="0.001" max="1">
           </label>
-          <label>ct <span class="u">1/psi</span>
+          <label>ct <span class="u" data-unit="compressibility"></span>
             <input type="number" id="oil_ct" value="0.00001" step="0.000001" min="0.0000001">
           </label>
-          <label>Time <span class="u">h</span>
+          <label>Time <span class="u" data-unit="time"></span>
             <input type="number" id="oil_time" value="12" step="1" min="0.01">
           </label>
         </div>
@@ -273,7 +281,7 @@
 
       <div id="f-gasrock">
         <div class="row">
-          <label>Permeability k <span class="u">md</span>
+          <label>Permeability k <span class="u" data-unit="permeability"></span>
             <input type="number" id="gas_k" value="5" step="1" min="0.0001">
           </label>
           <label>Net thickness h <span class="u" data-unit="length"></span>
@@ -292,14 +300,14 @@
           <label>Skin
             <input type="number" id="gas_skin" value="0" step="0.5">
           </label>
-          <label id="f-beta">beta <span class="u">1/ft, 0 = estimate</span>
+          <label id="f-beta">beta <span class="u" id="beta_unit"></span>
             <input type="number" id="gas_beta" value="0" step="1000000" min="0">
           </label>
         </div>
       </div>
 
       <div id="f-bp" class="row">
-        <label>C
+        <label>C <span class="u" id="bp_c_unit"></span>
           <input type="number" id="bp_c" value="0.015" step="0.001" min="0.0000001">
         </label>
         <label>n
