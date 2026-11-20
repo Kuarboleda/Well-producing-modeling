@@ -33,7 +33,7 @@ const NODAL_POINTS = 25;          // points along each curve when the VLP is cal
 // same height and put TVD = 0 and the deepest point at the same two heights, so a depth read off
 // one panel is at the same place on the other: these are the chart's top and bottom margins, and
 // the schematic is told to use them as its own padding.
-const DEPTH_TOP = 100;            // pixels above TVD = 0: the top axis in one, the tree in the other
+const DEPTH_TOP = 132;            // pixels above TVD = 0: the top axis in one, the tree in the other
 const DEPTH_BOTTOM = 46;          // pixels below the deepest point: the bottom axis, and rock
 
 // ---------------------------------------------------------------------
@@ -1105,11 +1105,15 @@ function completionDepths(c) {
                                      Math.min(50, perf_md * 0.02)),
                             perf_md * 0.2);
   const perf_top = Math.max(perf_md - interval, perf_md * 0.6);
-  // a packer is usually set a hundred feet or two above the top of the perforations, and the tubing
-  // shoe a short way below it
-  const gap = Math.max(150, 0.02 * perf_md);
+  // A packer is usually set a hundred feet or two above the top of the perforations.  The tailpipe
+  // then carries on down past it and ends inside the perforated interval, so the fluid coming in
+  // through the perforations is met by the open end of the tubing rather than having to rise past
+  // it in the casing first.
+  // Neither of these is an input, so the drawing picks them - and it picks them far enough apart to
+  // be told apart on screen, which a hundred feet on an eight-thousand-foot well is not.
+  const gap = Math.max(400, 0.05 * perf_md);
   const packer_md = Math.max(perf_top - gap, perf_md * 0.4);
-  const shoe_md = Math.min(packer_md + Math.max(40, 0.006 * perf_md), perf_top - 10);
+  const shoe_md = perf_top + 0.5 * interval;
   return { perf_top, packer_md, shoe_md };
 }
 
@@ -1189,30 +1193,33 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     if (!tr) {
       legend.innerHTML = "";
     } else {
-      // the drops first - round, because that is how they are drawn - then the pattern bands
+      // the phases first, as round drops, because that is how they are drawn
       const phases = c.fluid_type === "oil"
         ? [["oil", "Oil"], ["water", "Water"], ["gas", "Gas"]]
         : [["gas", "Gas"], ["oil", "Condensate"], ["water", "Water"]];
-      const rows = Object.keys(wellview.FLOW_FAMILIES)
-        .filter((f) => view.families.has(f))
-        .map((f) => `<span><i style="background:${wellview.FLOW_FAMILIES[f].colour}"></i>`
-                    + `${wellview.FLOW_FAMILIES[f].label}</span>`);
       let html = phases
         .map(([key, label]) => `<span><i style="background:`
              + `${wellview.PHASE_COLOURS[key]};border-radius:50%"></i>${label}</span>`)
-        .join("") + rows.join("");
+        .join("");
       if (c.gas_lift) {
-        html += `<span class="flow-note">The lift gas going down the annulus is the same green as `
-          + `the gas in the tubing, because it is the same gas.</span>`;
+        html += `<span><i style="background:${wellview.PHASE_COLOURS.liftGas};`
+          + `border-radius:50%"></i>Lift gas</span>`;
       }
-      if (borrowed) {
-        html += `<span class="flow-note">The tubing is tinted by flow pattern. `
-          + `${advice.nameOf(c.correlation)}, the correlation in use, works out none, so this is `
-          + `<b>${advice.nameOf(patternFrom)}</b>'s pattern for the same well at the same rate. `
-          + `Every pressure here is still ${advice.nameOf(c.correlation)}'s.</span>`;
-      } else if (rows.length) {
-        html += `<span class="flow-note">The tubing is tinted by the flow pattern `
-          + `${advice.nameOf(patternFrom)} works out at each depth.</span>`;
+      // then the regimes this well has, named rather than swatched: each one is drawn as its own
+      // shape inside the tubing, so a colour chip would say nothing
+      const rows = Object.keys(wellview.FLOW_FAMILIES)
+        .filter((f) => view.families.has(f))
+        .map((f) => wellview.FLOW_FAMILIES[f].label);
+      if (rows.length) {
+        html += `<span class="flow-note">Up the tubing, ${advice.nameOf(patternFrom)} works out `
+          + `<b>${rows.join("</b>, <b>")}</b> flow, each drawn as it looks; hover on the tubing `
+          + `for the depths.`
+          + (borrowed
+            ? ` ${advice.nameOf(c.correlation)}, the correlation in use, works out no pattern of `
+              + `its own, so the shapes are ${advice.nameOf(patternFrom)}'s for the same well at `
+              + `the same rate. Every pressure here is still ${advice.nameOf(c.correlation)}'s.`
+            : "")
+          + `</span>`;
       }
       legend.innerHTML = html;
     }

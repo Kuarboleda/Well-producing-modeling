@@ -43,20 +43,34 @@ measurable rather than a matter of taste, so it was measured:
   injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
   the perforations is obvious in a picture and invisible in a column of numbers.
 * Beside the pressure and temperature profile is **the well itself**, drawn from the inputs: the
-  Christmas tree, the casing, the cement, the tubing, the production packer, the open tubing shoe,
-  the gas lift valve and the perforations, with a depth scale and the fluid animated through them.
-  Formation fluid enters through the perforations, rises inside the casing below the packer and
-  turns into the open end of the tubing; the tubing itself is tinted by the flow pattern the
-  correlation reports at each depth.
+  Christmas tree - swab, two master valves and the production wing - the wellhead annulus seal, the
+  gas lift injection wing below it, the casing, the tubing, the production packer, the tailpipe, the
+  gas lift valve, the perforations and the casing shoe, with a depth scale and the fluid animated
+  through them.  Valves are the standard circle-and-cross symbol and seals are red crossed blocks.
 
-  The packer is drawn **above** the top of the perforations and the shoe between the two, because
-  that is where they go: a packer seals the annulus off above the producing interval. With gas lift
-  on, the lift gas enters the annulus at the tubing head, travels down it to the valve at its own
-  depth and passes through into the tubing; above that depth the gas bubbles are bigger and keep
-  growing towards surface, as gas does when the pressure falls.
+  The packer is drawn **above** the top of the perforations, sealing tubing to casing with no gap,
+  and the tailpipe hangs on past it into the perforated interval, so formation fluid entering
+  through the perforations meets the open end of the tubing.
 
-  The telemetry - rate, Pwf, oil rate, AOF, reservoir pressure - sits beside the drawing, which is
-  the same information the old strip above the charts carried.
+  The annulus says what state the well is in.  With gas lift on it holds a gas column from surface
+  down to the gas lift valve and dead completion fluid below it, which is what an unloaded annulus
+  looks like, and gas jets through the valve into the tubing.  With gas lift off there is no gas in
+  it at all: the whole annulus is dead fluid and the well flows on its own.
+
+  Inside the tubing the flow regime is **drawn**, not tinted.  Bubble flow is a liquid column with
+  dispersed bubbles in it; slug flow is dome-topped Taylor bubbles spanning most of the bore with
+  liquid slugs between them; churn is distorted gas pockets and frothy liquid bridges; annular is a
+  gas core inside a wavy liquid film on the wall, with entrained droplets.  Hovering anywhere on the
+  tubing says which regime it is and over what depths.  Oil is green, water blue and gas red - the
+  bright red is injected lift gas, the deep red is solution gas from the reservoir, and above the
+  valve, where the two have mixed, it is the red in between.
+
+  The depth scale is shared with the pressure and temperature profile beside it: both panels put
+  TVD = 0 and the deepest point at the same two heights, so a depth read off one is at the same
+  place on the other.
+
+  What the well makes - liquid, oil, water and gas rates and the drawdown - is in the strip across
+  the top of the three panels; Pwf, AOF and reservoir pressure sit beside the drawing.
 
   Only five of the eight work out a pattern at all: Hagedorn and Brown has one holdup correlation for
   everything, Gray assumes the gas is continuous without naming a pattern, and Fancher and Brown
@@ -102,7 +116,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
 | `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
-| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, both well drawings, the packer above the perforations, the gas lift path and bubble growth, the telemetry, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout |
+| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the well drawing, the packer and the wellhead seal, the tailpipe in the perforations, the tree's four valves, the annulus state with gas lift on and off, the flow regimes, the shared depth scale, the rate strip, the telemetry, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout |
 | `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
