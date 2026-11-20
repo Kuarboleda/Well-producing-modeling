@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integrated Well Modelling Tool</title>
+<!--
+  The whole app is files: no server, nothing to wake up.  Every calculation below runs inside the
+  browser, in pvt.js and ipr.js, which are line-for-line translations of the Python engine and are
+  held against it by tools/crosscheck.mjs.
+
+  Plotly draws the chart.  It is the only outside library, pinned to an exact version.
+-->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root {
+    --ink: #16202b;
+    --ink-soft: #5a6b7c;
+    --line: #d9e1e8;
+    --panel: #f6f8fa;
+    --bg: #ffffff;
+    --accent: #1f6feb;
+    --ipr: #1f77b4;
+    --warn-bg: #fff6e0;
+    --warn-line: #e3b341;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 14px 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: baseline;
+  }
+  header h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  header .sub { color: var(--ink-soft); font-size: 13px; }
+  header .spacer { flex: 1 1 auto; }
+  header button { font-size: 13px; }
+
+  .layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
+  .panel {
+    flex: 0 0 340px;
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    padding: 16px 18px 28px;
+    min-height: calc(100vh - 120px);
+  }
+  .main { flex: 1 1 520px; padding: 16px 20px 32px; min-width: 0; }
+
+  fieldset { border: none; margin: 0 0 18px; padding: 0; }
+  legend {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft); padding: 0 0 8px;
+  }
+  label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--ink); }
+  label .u { color: var(--ink-soft); font-weight: 400; }
+  input[type="number"], select, button {
+    width: 100%; padding: 7px 9px; margin-top: 3px;
+    border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; font-size: 14px; color: var(--ink); background: #fff;
+  }
+  input[type="number"]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { cursor: pointer; background: #fff; width: auto; padding: 7px 13px; }
+  button:hover { border-color: var(--ink-soft); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .row { display: flex; gap: 10px; }
+  .row > label { flex: 1 1 0; min-width: 0; }
+  .hidden { display: none !important; }
+
+  .results { display: flex; flex-wrap: wrap; gap: 0 28px; margin: 0 0 14px; padding: 0; list-style: none; }
+  .results li { margin: 0 0 8px; }
+  .results .k { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+  .results .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .results .v small { font-size: 12px; color: var(--ink-soft); font-weight: 400; }
+
+  #chart { width: 100%; height: 460px; }
+  .note {
+    border: 1px solid var(--line); border-left: 3px solid var(--ink-soft);
+    background: var(--panel); padding: 10px 12px; border-radius: 4px;
+    font-size: 13px; color: var(--ink-soft); margin: 16px 0 0;
+  }
+  .note.warn { background: var(--warn-bg); border-left-color: var(--warn-line); color: #6b4b00; }
+  .note.error { background: #fff1f0; border-left-color: #d1242f; color: #8b1a1f; }
+  .note b { color: inherit; }
+  table.curve { border-collapse: collapse; font-size: 13px; margin-top: 14px; width: 100%; max-width: 420px; }
+  table.curve th, table.curve td { text-align: right; padding: 3px 10px 3px 0; font-variant-numeric: tabular-nums; }
+  table.curve th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--line); }
+  details { margin-top: 14px; font-size: 13px; color: var(--ink-soft); }
+  summary { cursor: pointer; }
+  footer { border-top: 1px solid var(--line); padding: 14px 20px; font-size: 12px; color: var(--ink-soft); }
+  @media (max-width: 760px) {
+    .panel { flex: 1 1 100%; border-right: none; border-bottom: 1px solid var(--line); min-height: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Integrated Well Modelling Tool</h1>
+  <span class="sub">Inflow performance &mdash; early version</span>
+  <span class="spacer"></span>
+  <button id="btn-save">Save case</button>
+  <button id="btn-open">Open case</button>
+  <input type="file" id="file-open" accept=".json" class="hidden">
+</header>
+
+<div class="layout">
+  <form class="panel" id="panel" autocomplete="off">
+
+    <fieldset>
+      <legend>Example wells</legend>
+      <label>
+        <select id="sample">
+          <option value="">(choose an example and press Load)</option>
+          <option value="oil_pi">Oil well, PI entry</option>
+          <option value="oil_vogel">Oil well below bubble point, one flowing test</option>
+          <option value="oil_darcy">Oil well from rock properties (Darcy)</option>
+          <option value="gas_jones">Gas well with turbulence (Jones)</option>
+        </select>
+      </label>
+      <button type="button" id="btn-sample">Load example</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Reservoir</legend>
+      <label>Fluid
+        <select id="fluid_type">
+          <option value="oil">Oil and water</option>
+          <option value="gas">Gas</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>Static reservoir pressure <span class="u" data-unit="pressure"></span>
+          <input type="number" id="p_res" value="3000" step="50" min="1">
+        </label>
+        <label>Temperature <span class="u" data-unit="temperature"></span>
+          <input type="number" id="t_res" value="200" step="5">
+        </label>
+      </div>
+    </fieldset>
+
+    <!-- ---------------- OIL ---------------- -->
+    <fieldset id="g-oil">
+      <legend>Inflow model (oil)</legend>
+      <label>Model
+        <select id="oil_ipr">
+          <option value="pi">Productivity index (PI)</option>
+          <option value="vogel">Vogel (one flowing test)</option>
+          <option value="darcy">Darcy from rock properties</option>
+          <option value="fetkovich">Fetkovich (two flowing tests)</option>
+        </select>
+      </label>
+
+      <label id="f-pi">Productivity index <span class="u" data-unit="pi"></span>
+        <input type="number" id="pi" value="3" step="0.1" min="0.0001">
+      </label>
+
+      <div id="f-vogel" class="row">
+        <label>Test rate <span class="u" data-unit="liquidRate"></span>
+          <input type="number" id="vogel_q" value="2000" step="100" min="0.001">
+        </label>
+        <label>Test Pwf <span class="u" data-unit="pressure"></span>
+          <input type="number" id="vogel_pwf" value="2000" step="50" min="0">
+        </label>
+      </div>
+
+      <div id="f-fet">
+        <div class="row">
+          <label>Test 1 rate <span class="u" data-unit="liquidRate"></span>
+            <input type="number" id="fet_q1" value="1000" step="100" min="0.001">
+          </label>
+          <label>Test 1 Pwf <span class="u" data-unit="pressure"></span>
+            <input type="number" id="fet_pwf1" value="2500" step="50" min="0">
+          </label>
+        </div>
+        <div class="row">
+          <label>Test 2 rate <span class="u" data-unit="liquidRate"></span>
+            <input type="number" id="fet_q2" value="2000" step="100" min="0.001">
+          </label>
+          <label>Test 2 Pwf <span class="u" data-unit="pressure"></span>
+            <input type="number" id="fet_pwf2" value="1800" step="50" min="0">
+          </label>
+        </div>
+      </div>
+
+      <div id="f-darcy">
+        <div class="row">
+          <label>Permeability k <span class="u">md</span>
+            <input type="number" id="oil_k" value="50" step="5" min="0.0001">
+          </label>
+          <label>Net thickness h <span class="u" data-unit="length"></span>
+            <input type="number" id="oil_h" value="20" step="5" min="0.0001">
+          </label>
+        </div>
+        <div class="row">
+          <label>Bo <span class="u">rb/STB</span>
+            <input type="number" id="oil_bo" value="1.25" step="0.01" min="0.0001">
+          </label>
+          <label>Oil viscosity <span class="u">cP</span>
+            <input type="number" id="oil_mu" value="0.8" step="0.1" min="0.0001">
+          </label>
+        </div>
+        <div class="row">
+          <label>Drainage radius re <span class="u" data-unit="length"></span>
+            <input type="number" id="oil_re" value="1000" step="50" min="0.01">
+          </label>
+          <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+            <input type="number" id="oil_rw" value="0.354" step="0.01" min="0.001">
+          </label>
+        </div>
+        <label>Skin
+          <input type="number" id="oil_skin" value="0" step="0.5">
+        </label>
+        <label>Flow regime
+          <select id="oil_regime">
+            <option value="pseudosteady">Pseudosteady state (closed drainage area)</option>
+            <option value="steady">Steady state (pressure held at re)</option>
+            <option value="transient">Transient (infinite acting, at a time)</option>
+          </select>
+        </label>
+        <div id="f-transient" class="row">
+          <label>Porosity
+            <input type="number" id="oil_phi" value="0.2" step="0.01" min="0.001" max="1">
+          </label>
+          <label>ct <span class="u">1/psi</span>
+            <input type="number" id="oil_ct" value="0.00001" step="0.000001" min="0.0000001">
+          </label>
+          <label>Time <span class="u">h</span>
+            <input type="number" id="oil_time" value="12" step="1" min="0.01">
+          </label>
+        </div>
+      </div>
+
+      <label id="f-pb">Bubble point <span class="u" data-unit="pressure"></span>
+        <input type="number" id="pb" value="2484" step="25" min="0">
+      </label>
+    </fieldset>
+
+    <!-- ---------------- GAS ---------------- -->
+    <fieldset id="g-gas">
+      <legend>Inflow model (gas)</legend>
+      <label>Model
+        <select id="gas_ipr">
+          <option value="jones">Jones (Darcy plus turbulence)</option>
+          <option value="darcy">Darcy (pressure squared)</option>
+          <option value="backpressure">Back pressure (C and n)</option>
+        </select>
+      </label>
+      <div class="row">
+        <label>Gas gravity <span class="u">air = 1</span>
+          <input type="number" id="gas_sg_g" value="0.65" step="0.01" min="0.5" max="1.5">
+        </label>
+        <label>H2S <span class="u">fraction</span>
+          <input type="number" id="y_h2s" value="0" step="0.01" min="0" max="0.9">
+        </label>
+        <label>CO2 <span class="u">fraction</span>
+          <input type="number" id="y_co2" value="0" step="0.01" min="0" max="0.9">
+        </label>
+      </div>
+      <label>Gas viscosity correlation
+        <select id="gas_visc">
+          <option value="lee">Lee, Gonzalez and Eakin</option>
+          <option value="carr">Carr, Kobayashi and Burrows</option>
+        </select>
+      </label>
+
+      <div id="f-gasrock">
+        <div class="row">
+          <label>Permeability k <span class="u">md</span>
+            <input type="number" id="gas_k" value="5" step="1" min="0.0001">
+          </label>
+          <label>Net thickness h <span class="u" data-unit="length"></span>
+            <input type="number" id="gas_h" value="40" step="5" min="0.0001">
+          </label>
+        </div>
+        <div class="row">
+          <label>Drainage radius re <span class="u" data-unit="length"></span>
+            <input type="number" id="gas_re" value="1000" step="50" min="0.01">
+          </label>
+          <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+            <input type="number" id="gas_rw" value="0.354" step="0.01" min="0.001">
+          </label>
+        </div>
+        <div class="row">
+          <label>Skin
+            <input type="number" id="gas_skin" value="0" step="0.5">
+          </label>
+          <label id="f-beta">beta <span class="u">1/ft, 0 = estimate</span>
+            <input type="number" id="gas_beta" value="0" step="1000000" min="0">
+          </label>
+        </div>
+      </div>
+
+      <div id="f-bp" class="row">
+        <label>C
+          <input type="number" id="bp_c" value="0.015" step="0.001" min="0.0000001">
+        </label>
+        <label>n
+          <input type="number" id="bp_n" value="0.85" step="0.01" min="0.01" max="1">
+        </label>
+      </div>
+    </fieldset>
+  </form>
+
+  <main class="main">
+    <ul class="results" id="results"></ul>
+    <div id="chart"></div>
+    <div id="messages"></div>
+
+    <details>
+      <summary>The curve as numbers</summary>
+      <table class="curve" id="curve-table"></table>
+    </details>
+
+    <p class="note">
+      This early version draws the <b>inflow</b> only. The tubing side (VLP) and the operating point are
+      still being translated from the Python, so there is no intersection yet. The PVT and inflow
+      calculations behind this page have been checked against the Python engine over 12,527 cases; the
+      largest disagreement was 1.15e-14, which is rounding.
+    </p>
+  </main>
+</div>
+
+<footer>
+  Vu Huu Huy &middot; free to use &middot; everything is calculated in your browser; nothing is sent anywhere.
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

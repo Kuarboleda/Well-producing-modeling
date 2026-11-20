@@ -1,0 +1,7 @@
+# Files that should never be published with the website.
+__pycache__/
+*.pyc
+
+# The expected-answer files are produced by tools/dump_*.py from the Python engine.
+# They are large and easy to rebuild, so they are kept out of the repository.
+tools/*_expected.json

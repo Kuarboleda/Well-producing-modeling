@@ -1,0 +1,11 @@
+{
+  "name": "integrated-well-modelling-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static browser version of the Integrated Well Modelling Tool. 'type: module' tells Node to read the .js files as ES modules, the same way a browser does, so the cross-check scripts can import the very files the web page uses. There is no build step and nothing to install to run the app itself.",
+  "scripts": {
+    "check": "tsc --noEmit --allowJs --checkJs --target es2022 --moduleResolution bundler --module esnext *.js",
+    "crosscheck": "node tools/crosscheck.mjs"
+  }
+}

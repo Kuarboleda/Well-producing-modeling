@@ -1,0 +1,25 @@
+# ---------------------------------------------------------------------
+# What must NOT go into the public GitHub repository.
+#
+# The first block is the important one: these folders hold papers, manuals and books that are
+# copyrighted by their publishers.  They are fine on your own laptop for your own use; publishing
+# them would be copyright infringement and could have the repository taken down.
+# ---------------------------------------------------------------------
+PROSPER manual/
+SPE papers/
+Technical books/
+
+# Working notes rather than anything to publish
+*.docx
+~$*
+*.tmp
+
+# Python leftovers
+__pycache__/
+*.pyc
+
+# Cross-check data: produced by docs/tools/dump_*.py, large, and rebuilt in seconds
+docs/tools/*_expected.json
+
+# Saved cases downloaded from the app while testing
+well_case*.json
