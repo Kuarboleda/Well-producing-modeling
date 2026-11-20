@@ -14,6 +14,41 @@ import { readFileSync, existsSync } from "node:fs";
 import * as pvt from "../pvt.js";
 import * as ipr from "../ipr.js";
 import * as vlp from "../vlp.js";
+import * as wellmod from "../well.js";
+
+// ---------------------------------------------------------------------
+// The traverse takes a well and a fluid object, which the Python side wrote out as plain
+// dictionaries tagged with a "kind".  These build the JavaScript objects back from exactly the same
+// numbers, so the two engines are given the same well and the same fluid and nothing else differs.
+// ---------------------------------------------------------------------
+
+/** @param {any} spec */
+function build(spec) {
+  const { kind, ...rest } = spec;
+  if (kind === "well") {
+    return wellmod.makeWell({ md: rest.md, tvd: rest.tvd, tubing: rest.tubing,
+                              t_reservoir: rest.t_reservoir, roughness_in: rest.roughness_in,
+                              ambient_table: rest.ambient_table });
+  }
+  if (kind === "oil") return new vlp.OilWaterFluid(rest);
+  if (kind === "gas") return new vlp.GasFluid(rest);
+  throw new Error(`unknown spec kind ${kind}`);
+}
+
+/** The object-taking functions, wrapped so the cross-check can call them positionally. */
+const traverse = (w, f, ...rest) => vlp.pressure_traverse(build(w), build(f), ...rest);
+const vlpCurve = (w, f, ...rest) => vlp.vlp_curve(build(w), build(f), ...rest);
+const fluidConditions = (f, rate, p, T, d_in, inj) =>
+  inj === undefined || inj === null
+    ? build(f).conditions(rate, p, T, d_in)
+    : build(f).conditions(rate, p, T, d_in, inj);
+const fluidThermal = (f, rate) => {
+  const fluid = build(f);
+  const out = [...fluid.thermalData(rate)];
+  // @ts-ignore - only an oil fluid has injected gas
+  if ((fluid.injection_gas_rate ?? 0.0) > 0.0) out.push(...fluid.injectedThermal());
+  return out;
+};
 
 // Python snake_case name -> the JavaScript function that must match it.
 const MAP = {
@@ -78,6 +113,15 @@ const MAP = {
   mukherjee_brill_gradient: vlp.mukherjee_brill_gradient,
   fb_glr_band: vlp.fb_glr_band, fb_friction_factor: vlp.fb_friction_factor,
   fancher_brown_gradient: vlp.fancher_brown_gradient,
+  // ---- well.py / well.js ----
+  build_steps: (w, ...rest) => wellmod.buildSteps(build(w), ...rest),
+  tvd_at: (w, md) => wellmod.tvd_at(build(w), md),
+  ambient_at: (w, md) => wellmod.ambient_at(build(w), md),
+  fluid_temperatures: (w, steps, mass, cp) => wellmod.fluidTemperatures(build(w), steps, mass, cp),
+  parse_survey_text: wellmod.parseSurveyText,
+  // ---- the fluids and the traverse ----
+  fluid_conditions: fluidConditions, fluid_thermal: fluidThermal,
+  pressure_traverse: traverse, vlp_curve: vlpCurve,
 };
 
 /**

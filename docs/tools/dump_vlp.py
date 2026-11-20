@@ -14,6 +14,7 @@ import warnings
 
 sys.path.insert(0, "..")
 import vlp                                            # noqa: E402  (the Python engine)
+import well as wellmod                                # noqa: E402
 
 warnings.simplefilter("ignore")
 
@@ -23,6 +24,69 @@ def conditions(v_sl, v_sg, rho_l=52.0, rho_g=2.5, mu_l=1.2, mu_g=0.018, sigma=20
     """One set of flow conditions, in the shape the gradient functions expect."""
     return {"v_sl": v_sl, "v_sg": v_sg, "rho_l": rho_l, "rho_g": rho_g, "mu_l": mu_l,
             "mu_g": mu_g, "sigma": sigma, "frac_w": frac_w, "glr": glr}
+
+
+# ---------------------------------------------------------------------
+# The traverse takes a Well and a Fluid object, which cannot go into JSON as they are.  They are
+# written out as plain dictionaries with a "kind" tag, and crosscheck.mjs builds the JavaScript
+# objects back from exactly the same numbers.
+# ---------------------------------------------------------------------
+
+def well_spec(md, tvd, tubing, t_reservoir, roughness_in=0.0006, ambient_table=None):
+    return {"kind": "well", "md": md, "tvd": tvd, "tubing": tubing,
+            "t_reservoir": t_reservoir, "roughness_in": roughness_in,
+            "ambient_table": ambient_table}
+
+
+def oil_spec(**kw):
+    return {"kind": "oil", **kw}
+
+
+def gas_spec(**kw):
+    return {"kind": "gas", **kw}
+
+
+def build(spec):
+    """Turn one of those dictionaries back into the Python object."""
+    kind = spec["kind"]
+    rest = {k: v for k, v in spec.items() if k != "kind"}
+    if kind == "well":
+        return wellmod.Well(md=rest["md"], tvd=rest["tvd"],
+                            tubing=[tuple(t) for t in rest["tubing"]],
+                            t_reservoir=rest["t_reservoir"],
+                            roughness_in=rest["roughness_in"],
+                            ambient_table=([tuple(r) for r in rest["ambient_table"]]
+                                           if rest["ambient_table"] else None))
+    if kind == "oil":
+        return vlp.OilWaterFluid(**rest)
+    if kind == "gas":
+        return vlp.GasFluid(**rest)
+    raise ValueError(f"unknown spec kind {kind}")
+
+
+OBJECT_ARGS = {"pressure_traverse": (0, 1), "vlp_curve": (0, 1),
+               "fluid_conditions": (0,), "fluid_thermal": (0,)}
+
+
+def fluid_conditions(fluid, rate, p, T, d_in, inj_scfd=None):
+    """conditions() reached through one positional call, so the dump and the cross-check agree."""
+    if inj_scfd is None:
+        return fluid.conditions(rate, p, T, d_in)
+    return fluid.conditions(rate, p, T, d_in, inj_scfd=inj_scfd)
+
+
+def fluid_thermal(fluid, rate):
+    """[mass rate lb/h, cp] plus the gas lift gas when there is any."""
+    out = list(fluid.thermal_data(rate))
+    if getattr(fluid, "injection_gas_rate", 0.0) > 0.0:
+        out.extend(fluid.injected_thermal())
+    return out
+
+
+EXTRA_FUNCS = {"fluid_conditions": fluid_conditions, "fluid_thermal": fluid_thermal,
+               "build_steps": wellmod.build_steps, "fluid_temperatures": wellmod.fluid_temperatures,
+               "tvd_at": wellmod.tvd_at, "ambient_at": wellmod.ambient_at,
+               "parse_survey_text": wellmod.parse_survey_text}
 
 
 def cases():
@@ -303,6 +367,84 @@ def cases():
                                 random.uniform(1.0, 70.0), 0.0,
                                 10 ** random.uniform(1, 4.5))]))
 
+    # ---- well.py: the survey, the steps and the temperature profile ----
+    VERT = well_spec([0.0, 8000.0], [0.0, 8000.0], [[0.0, 8000.0, 2.992]], 200.0)
+    DEV = well_spec([0.0, 2000.0, 6000.0, 9000.0], [0.0, 2000.0, 5500.0, 7000.0],
+                    [[0.0, 9000.0, 2.992]], 210.0)
+    TWO_TUBE = well_spec([0.0, 3000.0, 9000.0], [0.0, 3000.0, 8200.0],
+                         [[0.0, 4000.0, 3.958], [4000.0, 9000.0, 2.441]], 220.0)
+    TOE_UP = well_spec([0.0, 5000.0, 7000.0, 9000.0], [0.0, 5000.0, 6500.0, 6400.0],
+                       [[0.0, 9000.0, 2.992]], 200.0, 0.0012,
+                       [[0.0, 70.0, 4.0], [4000.0, 120.0, 6.0], [9000.0, 200.0, 5.0]])
+    for w in (VERT, DEV, TWO_TUBE, TOE_UP):
+        for step_ft in (50.0, 100.0, 237.0, 1000.0, 20000.0):
+            out.append(("build_steps", "build_steps", [w, step_ft]))
+        out.append(("build_steps_breaks", "build_steps", [w, 100.0, [1234.0, 6000.0]]))
+        for md in (0.0, 1.0, 1999.9, 2000.0, 4500.0, 7999.0, 1e6):
+            out.append(("tvd_at", "tvd_at", [w, md]))
+            out.append(("ambient_at", "ambient_at", [w, md]))
+        steps = wellmod.build_steps(build(w), 100.0)
+        for mass, cp_ in ((1000.0, 0.5), (50000.0, 0.62), (1.0, 1.0), (0.0, 0.5)):
+            out.append(("fluid_temperatures", "fluid_temperatures", [w, steps, mass, cp_]))
+        # one value per step, as gas lift makes it
+        masses = [2000.0 if k < len(steps) // 2 else 1500.0 for k in range(len(steps))]
+        cps = [0.55 if k < len(steps) // 2 else 0.5 for k in range(len(steps))]
+        out.append(("fluid_temperatures_list", "fluid_temperatures", [w, steps, masses, cps]))
+    for text in ("0 0\n2000 2000\n6000 5500\n9000 7000",
+                 "MD\tTVD\n0,0\n1000;1000\n 5000  4800 \n",
+                 "0 0\nrubbish\n\n3000 2900"):
+        out.append(("parse_survey_text", "parse_survey_text", [text]))
+
+    # ---- the fluid objects --------------------------------------------
+    OIL = oil_spec(api=35.0, gas_sg=0.75, rsb=500.0, water_cut=0.3)
+    OIL_DRY = oil_spec(api=22.0, gas_sg=0.65, rsb=200.0, water_cut=0.0, gor=350.0,
+                       pvt_method="standing", visc_method="beggs")
+    OIL_WET = oil_spec(api=45.0, gas_sg=0.85, rsb=900.0, water_cut=0.95, salinity=12.0,
+                       pb_meas=2600.0, pvt_method="petrosky", visc_method="petrosky")
+    OIL_GL = oil_spec(api=30.0, gas_sg=0.7, rsb=400.0, water_cut=0.5,
+                      injection_gas_rate=1500.0, injection_md=6000.0, injection_gas_sg=0.62)
+    GAS_DRY = gas_spec(gas_sg=0.65)
+    GAS_WET = gas_spec(gas_sg=0.72, cgr=25.0, cond_api=52.0, wgr=3.0, y_h2s=0.02, y_co2=0.05,
+                       visc_method="carr")
+    for f in (OIL, OIL_DRY, OIL_WET, OIL_GL):
+        for rate in (10.0, 500.0, 3000.0, 20000.0):
+            for p in (50.0, 500.0, 2000.0, 6000.0):
+                for T in (80.0, 150.0, 240.0):
+                    out.append(("fluid_conditions_oil", "fluid_conditions", [f, rate, p, T, 2.992]))
+            out.append(("fluid_thermal_oil", "fluid_thermal", [f, rate]))
+        for inj in (1.0, 1.5e6):
+            out.append(("fluid_conditions_oil_gl", "fluid_conditions",
+                        [f, 1200.0, 900.0, 160.0, 2.992, inj]))
+    for f in (GAS_DRY, GAS_WET):
+        for rate in (100.0, 5000.0, 50000.0):
+            for p in (50.0, 500.0, 2000.0, 6000.0):
+                for T in (80.0, 150.0, 240.0):
+                    out.append(("fluid_conditions_gas", "fluid_conditions", [f, rate, p, T, 2.441]))
+            out.append(("fluid_thermal_gas", "fluid_thermal", [f, rate]))
+
+    # ---- the pressure traverse ----------------------------------------
+    # Every correlation on every well shape, plus gas lift, a gas well, and the VLP multipliers.
+    for corr in ("beggs_brill", "hagedorn_brown", "gray", "orkiszewski", "ansari", "duns_ros",
+                 "mukherjee_brill", "fancher_brown"):
+        for w in (VERT, DEV, TWO_TUBE, TOE_UP):
+            for rate in (200.0, 2000.0, 12000.0):
+                out.append(("pressure_traverse", "pressure_traverse",
+                            [w, OIL, rate, 214.7, corr, 100.0, 1.0, 1.0]))
+        out.append(("pressure_traverse_wet", "pressure_traverse",
+                    [DEV, OIL_WET, 4000.0, 314.7, corr, 100.0, 1.0, 1.0]))
+        out.append(("pressure_traverse_gaslift", "pressure_traverse",
+                    [DEV, OIL_GL, 1500.0, 214.7, corr, 100.0, 1.0, 1.0]))
+        out.append(("pressure_traverse_gas", "pressure_traverse",
+                    [TWO_TUBE, GAS_WET, 8000.0, 514.7, corr, 100.0, 1.0, 1.0]))
+        out.append(("pressure_traverse_drygas", "pressure_traverse",
+                    [VERT, GAS_DRY, 15000.0, 414.7, corr, 100.0, 1.0, 1.0]))
+        out.append(("pressure_traverse_mult", "pressure_traverse",
+                    [VERT, OIL, 2000.0, 214.7, corr, 100.0, 0.85, 1.4]))
+        out.append(("pressure_traverse_step50", "pressure_traverse",
+                    [VERT, OIL, 2000.0, 214.7, corr, 50.0, 1.0, 1.0]))
+        out.append(("vlp_curve", "vlp_curve",
+                    [VERT, OIL, [100.0, 800.0, 2500.0, 8000.0, 25000.0], 214.7, corr, 100.0, 1.0, 1.0]))
+
     # ---- Gray's two pieces on their own ------------------------------
     for r in (1e-6, 0.001, 0.0069, 0.007, 0.0071, 0.05, 0.5, 5.0, 100.0):
         for n_v in (0.01, 1.0, 100.0, 1e4):
@@ -315,7 +457,13 @@ def cases():
 
 
 def run_one(func_name, args):
-    value = getattr(vlp, func_name)(*args)
+    if func_name in OBJECT_ARGS:
+        args = [build(a) if i in OBJECT_ARGS[func_name] else a for i, a in enumerate(args)]
+    elif func_name in ("build_steps", "fluid_temperatures", "tvd_at", "ambient_at"):
+        args = [build(args[0]) if isinstance(args[0], dict) and args[0].get("kind") == "well" else args[0],
+                *args[1:]]
+    func = EXTRA_FUNCS.get(func_name) or getattr(vlp, func_name)
+    value = func(*args)
     if isinstance(value, tuple):
         return list(value)
     return value

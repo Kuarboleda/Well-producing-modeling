@@ -6,9 +6,8 @@
  * Done so far: the friction factor, surface tension, Beggs and Brill (1973),
  * Hagedorn and Brown (1965), Gray (1974), Orkiszewski (1967), Duns and Ros (1963)
  * Ansari et al. (1994), Mukherjee and Brill (1983/1985) and Fancher and Brown (1963)
- * - that is, all eight correlations.
- * Still to come: the fluid objects and the pressure traverse that walks a gradient up
- * the well.
+ * - all eight correlations - the fluid objects, and the pressure traverse that walks a
+ * gradient from the wellhead down to the perforations.
  *
  * Every function keeps the same name and the same argument order as the Python, so
  * tools/crosscheck.mjs can call both with one list of numbers.
@@ -16,6 +15,12 @@
  * Units: pressure psia | length ft | velocity ft/s | density lb/ft3 | viscosity cP
  *        surface tension dyne/cm | diameter and roughness in | angle degrees from horizontal
  */
+
+import * as pvt from "./pvt.js";
+import { buildSteps, fluidTemperatures } from "./well.js";
+
+/** @typedef {import("./well.js").Well} Well */
+/** @typedef {import("./well.js").Step} Step */
 
 export const GC = 32.174;            // gravitational constant, lbm ft / (lbf s2). Also g in ft/s2 (g/gc = 1).
 export const RE_CONST = 1488.16;     // Reynolds number = 1488.16 * rho(lb/ft3) * v(ft/s) * d(ft) / mu(cP)
@@ -1748,6 +1753,241 @@ export function mukherjee_brill_gradient(p, angle_deg, d_in, roughness_in, c) {
 }
 
 // =====================================================================
+// Fluids: turn (rate, pressure, temperature) into velocities and fluid properties
+// =====================================================================
+// Each fluid has two methods used by the traverse:
+//     conditions(rate, p, T, d_in)  -> the flow conditions the gradient functions want
+//     thermalData(rate)             -> [mass rate lb/h, heat capacity] for the temperature profile
+//
+// In the Python these are dataclasses; here they are classes with the same fields and the same
+// defaults, built from one object so that a call reads the same way in both languages.
+
+/** Cross-section area (ft2) of a pipe of inner diameter d_in (inches). @param {number} d_in */
+function pipeArea(d_in) {
+  return Math.PI * (d_in / 12.0) ** 2 / 4.0;
+}
+
+/** Water density (lb/ft3) at about standard conditions. @param {number} salinity */
+function waterDensitySc(salinity) {
+  return pvt.waterProperties(14.7, 60.0, salinity).rho_w;
+}
+
+/**
+ * An oil well producing oil, water and gas, with continuous gas lift if asked for.
+ *
+ * Fields (all optional but api, gas_sg and rsb):
+ *   api, gas_sg, rsb      stock-tank oil gravity (API), gas gravity (air = 1), solution GOR at Pb
+ *   water_cut             water fraction of the liquid rate, 0 - 1
+ *   gor                   producing GOR (scf/STB); null = the same as rsb
+ *   salinity              water salinity (wt %)
+ *   pb_meas               measured bubble point (psia), optional
+ *   pvt_method            Pb, Rs, Bo correlation (see pvt.js)
+ *   visc_method           oil viscosity correlation
+ *   pvt_match             numbers from PVT matching to lab data, optional
+ *   injection_gas_rate    gas lift gas, Mscf/d (0 = no gas lift)
+ *   injection_md          depth of the injection point, ft MD
+ *   injection_gas_sg      gravity of the injected gas; null = the same as gas_sg
+ */
+export class OilWaterFluid {
+  /**
+   * @param {{api: number, gas_sg: number, rsb: number, water_cut?: number, gor?: number | null,
+   *          salinity?: number, pb_meas?: number | null, pvt_method?: string, visc_method?: string,
+   *          pvt_match?: any, injection_gas_rate?: number, injection_md?: number | null,
+   *          injection_gas_sg?: number | null}} spec
+   */
+  constructor(spec) {
+    this.api = spec.api;
+    this.gas_sg = spec.gas_sg;
+    this.rsb = spec.rsb;
+    this.water_cut = spec.water_cut ?? 0.0;
+    this.gor = spec.gor ?? null;
+    this.salinity = spec.salinity ?? 3.0;
+    this.pb_meas = spec.pb_meas ?? null;
+    this.pvt_method = spec.pvt_method ?? "glaso";
+    this.visc_method = spec.visc_method ?? "beal";
+    this.pvt_match = spec.pvt_match ?? null;
+    this.injection_gas_rate = spec.injection_gas_rate ?? 0.0;
+    this.injection_md = spec.injection_md ?? null;
+    this.injection_gas_sg = spec.injection_gas_sg ?? null;
+
+    check(0.0 <= this.water_cut && this.water_cut <= 1.0, "Water cut must be between 0 and 1.");
+    check(this.injection_gas_rate >= 0.0, "The gas injection rate cannot be negative.");
+    check(this.injection_gas_rate === 0.0 || (this.injection_md !== null && this.injection_md > 0.0),
+          "Gas lift needs an injection depth above the perforations (greater than 0).");
+    check(this.api > 0 && this.gas_sg > 0 && this.rsb > 0, "api, gas_sg and rsb must be > 0.");
+  }
+
+  /** The producing GOR (scf/STB): the one given, or the solution GOR at the bubble point. */
+  producingGor() {
+    return this.gor !== null ? this.gor : this.rsb;
+  }
+
+  /** Gravity of the injected gas (air = 1). */
+  injectedGasSg() {
+    return this.injection_gas_sg !== null ? this.injection_gas_sg : this.gas_sg;
+  }
+
+  /**
+   * Flow conditions at pressure p and temperature T, for a liquid rate (STB/d).
+   * inj_scfd is gas lift gas (scf/d) that has already joined the flow at this point (0 below the
+   * injection point).
+   * @param {number} rate @param {number} p @param {number} T @param {number} d_in @param {number} [inj_scfd]
+   * @returns {FlowConditions}
+   */
+  conditions(rate, p, T, d_in, inj_scfd = 0.0) {
+    check(rate > 0, "Rate must be > 0.");
+    const q_o = rate * (1.0 - this.water_cut);
+    const q_w = rate * this.water_cut;
+    const o = pvt.oilProperties(p, T, this.api, this.gas_sg, this.rsb, this.pb_meas,
+                                this.pvt_method, this.visc_method, this.pvt_match);
+    const w = pvt.waterProperties(p, T, this.salinity);
+    const g = pvt.gasProperties(p, T, this.gas_sg);
+
+    const free_gor = Math.max(this.producingGor() - o.rs, 0.0);       // gas that is NOT dissolved
+    const vol_o = q_o * o.bo * 5.615;                                 // ft3/d at pressure p
+    const vol_w = q_w * w.bw * 5.615;
+    let vol_g = q_o * free_gor * g.bg;
+    let rho_gas = g.rho_g;
+    let mu_gas = g.mu_g;
+    if (inj_scfd > 0.0) {
+      // Gas lift gas joins the formation gas.  Its volume at p and T comes from its own gravity;
+      // density and viscosity of the gas mixture are the volume-weighted averages of the two gases.
+      const gi = pvt.gasProperties(p, T, this.injectedGasSg());
+      const vol_i = inj_scfd * gi.bg;
+      const vol_total = vol_g + vol_i;
+      rho_gas = (vol_g * g.rho_g + vol_i * gi.rho_g) / vol_total;
+      mu_gas = (vol_g * g.mu_g + vol_i * gi.mu_g) / vol_total;
+      vol_g = vol_total;
+    }
+    const area = pipeArea(d_in);
+    const frac_o = vol_o / (vol_o + vol_w);                           // oil share of the liquid volume
+
+    const sigma_o = sigma_oil_gas(this.api, T, p);
+    const sigma_w = sigma_water_gas(T, p);
+    return {
+      v_sl: (vol_o + vol_w) / area / 86400.0,
+      v_sg: vol_g / area / 86400.0,
+      rho_l: frac_o * o.rho_o + (1.0 - frac_o) * w.rho_w,
+      rho_g: rho_gas,
+      mu_l: frac_o * o.mu_o + (1.0 - frac_o) * w.mu_w,
+      mu_g: mu_gas,
+      sigma: frac_o * sigma_o + (1.0 - frac_o) * sigma_w,
+      frac_w: 1.0 - frac_o,                   // water share of the liquid volume (Orkiszewski)
+      // producing gas-liquid ratio, scf per STB of liquid: all the gas at the surface
+      // (dissolved + free + injected), for Fancher and Brown
+      glr: (q_o * this.producingGor() + inj_scfd) / rate,
+    };
+  }
+
+  /** [total mass rate in lb/h, mixture heat capacity in Btu/lb/degF]. @param {number} rate @returns {[number, number]} */
+  thermalData(rate) {
+    const q_o = rate * (1.0 - this.water_cut);
+    const q_w = rate * this.water_cut;
+    const m_o = q_o * 350.0 * 141.5 / (this.api + 131.5);        // lb/d (350 lb per bbl of water)
+    const m_w = q_w * 5.615 * waterDensitySc(this.salinity);
+    const m_g = q_o * this.producingGor() * GAS_RHO_SC * this.gas_sg;
+    const total = m_o + m_w + m_g;
+    const cp = (OIL_CP * m_o + WATER_CP * m_w + GAS_CP * m_g) / total;
+    return [total / 24.0, cp];
+  }
+
+  /** [mass rate in lb/h, heat capacity in Btu/lb/degF] of the gas lift gas. @returns {[number, number]} */
+  injectedThermal() {
+    return [this.injection_gas_rate * 1000.0 * GAS_RHO_SC * this.injectedGasSg() / 24.0, GAS_CP];
+  }
+}
+
+/**
+ * A gas well, dry or wet (with condensate and water).
+ *
+ * Fields (all optional but gas_sg):
+ *   gas_sg        gas gravity (air = 1); for a wet gas use the well-stream gravity
+ *   cgr, wgr      condensate-gas and water-gas ratio (STB/MMscf)
+ *   cond_api      condensate gravity (API)
+ *   salinity      water salinity (wt %)
+ *   y_h2s, y_co2  H2S and CO2 mole fractions (0 - 1)
+ *   visc_method   gas viscosity: 'lee' or 'carr'
+ *   gas_sg_dry    separator (dry) gas gravity; when > 0 the well-stream gravity is recalculated if
+ *                 the CGR changes (commingled layers).  0 = gas_sg is kept as it is
+ */
+export class GasFluid {
+  /**
+   * @param {{gas_sg: number, cgr?: number, cond_api?: number, wgr?: number, salinity?: number,
+   *          y_h2s?: number, y_co2?: number, visc_method?: string, gas_sg_dry?: number}} spec
+   */
+  constructor(spec) {
+    this.gas_sg = spec.gas_sg;
+    this.cgr = spec.cgr ?? 0.0;
+    this.cond_api = spec.cond_api ?? 50.0;
+    this.wgr = spec.wgr ?? 0.0;
+    this.salinity = spec.salinity ?? 3.0;
+    this.y_h2s = spec.y_h2s ?? 0.0;
+    this.y_co2 = spec.y_co2 ?? 0.0;
+    this.visc_method = spec.visc_method ?? "lee";
+    this.gas_sg_dry = spec.gas_sg_dry ?? 0.0;
+
+    check(this.gas_sg > 0, "Gas gravity must be > 0.");
+    check(this.cgr >= 0 && this.wgr >= 0, "CGR and WGR cannot be negative.");
+  }
+
+  /**
+   * Flow conditions for a gas rate (Mscf/d) at pressure p and temperature T.
+   * @param {number} rate @param {number} p @param {number} T @param {number} d_in @returns {FlowConditions}
+   */
+  conditions(rate, p, T, d_in) {
+    check(rate > 0, "Rate must be > 0.");
+    const g = pvt.gasProperties(p, T, this.gas_sg, this.y_h2s, this.y_co2, this.visc_method);
+    const area = pipeArea(d_in);
+    const vol_g = rate * 1000.0 * g.bg;                      // ft3/d at pressure p
+
+    const q_c = rate * this.cgr / 1000.0;                    // condensate, STB/d
+    const q_w = rate * this.wgr / 1000.0;                    // water, STB/d
+    const w = pvt.waterProperties(p, T, this.salinity);
+    const vol_c = q_c * 5.615;                               // condensate Bo taken as 1
+    const vol_w = q_w * w.bw * 5.615;
+    const vol_l = vol_c + vol_w;
+
+    let rho_l;
+    let mu_l;
+    let sigma;
+    if (vol_l <= 0) {                                        // dry gas: liquid values are not used
+      rho_l = 62.4;
+      mu_l = 1.0;
+      sigma = 50.0;
+    } else {
+      const frac_c = vol_c / vol_l;
+      const rho_c = 350.0 * 141.5 / (this.cond_api + 131.5) / 5.615;
+      rho_l = frac_c * rho_c + (1.0 - frac_c) * w.rho_w;
+      mu_l = frac_c * pvt.muDeadBeal(this.cond_api, T) + (1.0 - frac_c) * w.mu_w;
+      sigma = (frac_c * sigma_oil_gas(this.cond_api, T, p)
+               + (1.0 - frac_c) * sigma_water_gas(T, p));
+    }
+    return {
+      v_sl: vol_l / area / 86400.0,
+      v_sg: vol_g / area / 86400.0,
+      rho_l, rho_g: g.rho_g,
+      mu_l, mu_g: g.mu_g,
+      sigma,
+      frac_w: vol_l <= 0 ? 0.0 : vol_w / vol_l,
+      // scf per STB of liquid
+      glr: (this.cgr + this.wgr) > 0 ? 1.0e6 / (this.cgr + this.wgr) : 1.0e9,
+    };
+  }
+
+  /** [total mass rate in lb/h, mixture heat capacity in Btu/lb/degF]. @param {number} rate @returns {[number, number]} */
+  thermalData(rate) {
+    const m_g = rate * 1000.0 * GAS_RHO_SC * this.gas_sg;
+    const m_c = rate * this.cgr / 1000.0 * 350.0 * 141.5 / (this.cond_api + 131.5);
+    const m_w = rate * this.wgr / 1000.0 * 5.615 * waterDensitySc(this.salinity);
+    const total = m_g + m_c + m_w;
+    const cp = (GAS_CP * m_g + OIL_CP * m_c + WATER_CP * m_w) / total;
+    return [total / 24.0, cp];
+  }
+}
+
+/** @typedef {OilWaterFluid | GasFluid} Fluid */
+
+// =====================================================================
 // Fancher & Brown (1963) - the no-slip "lowest possible VLP"
 // =====================================================================
 // Fancher, G.H. Jr. and Brown, K.E., "Prediction of Pressure Gradients for Multiphase Flow in
@@ -1837,4 +2077,302 @@ export function fancher_brown_gradient(p, angle_deg, d_in, roughness_in, c) {
   const mu_ns = lam * c.mu_l + (1.0 - lam) * c.mu_g;
   return { dpdl: hydrostatic + friction, hl: lam, regime: "no-slip", hydrostatic,
            friction, f_tp: f, re: RE_CONST * rho * v_m * d_ft / mu_ns, e_k: 0.0, glr: c.glr };
+}
+
+// =====================================================================
+// The pressure traverse: wellhead -> perforations
+// =====================================================================
+
+/** @typedef {(p: number, angle_deg: number, d_in: number, roughness_in: number, c: FlowConditions) => any} GradientFn */
+
+/** @type {Record<string, GradientFn>} */
+export const GRADIENT_FUNCS = {
+  beggs_brill: beggs_brill_gradient,
+  hagedorn_brown: hagedorn_brown_gradient,
+  gray: gray_gradient,
+  orkiszewski: orkiszewski_gradient,
+  ansari: ansari_gradient,
+  duns_ros: duns_ros_gradient,
+  mukherjee_brill: mukherjee_brill_gradient,
+  fancher_brown: fancher_brown_gradient,
+};
+
+// Correlations whose flow-pattern boundaries are known to make real jumps in the gradient: the
+// pressure step accepts a jump up to this fraction of its own pressure change (see stepBottomPressure)
+export const JUMPY_CORRELATIONS = { orkiszewski: 0.5, ansari: 0.5, duns_ros: 0.5, mukherjee_brill: 0.5 };
+
+// A rate so high that the tubing would need more than this pressure can never be produced (no
+// reservoir in this app is this high, and the PVT correlations are not meant for more).  Without a
+// cap the search for the bottom pressure of a step at such a rate can wander to 100,000 psia, where
+// the correlations return negative viscosities and the calculation stops with "Reynolds number must
+// be > 0".  With the cap the VLP simply reads P_MAX there, far above the IPR.
+export const P_MAX = 20000.0;       // psia
+
+/**
+ * Pressure at the bottom of one step, given the pressure at its top.
+ *
+ * The gradient depends on the average pressure of the step, which depends on the bottom pressure we
+ * are looking for, so we search for the bottom pressure x that satisfies
+ *     x = p_top + gradient(average of p_top and x) * length.
+ * Write residual(x) = (that right-hand side) - x; we need residual = 0.
+ *
+ * Method (robust, still simple):
+ *   * the first guess is made from a typical gradient, the second is the plain 'repeat' step;
+ *   * after that, a secant step (a straight line through the last two points);
+ *   * we remember the closest x below the answer (residual > 0) and the closest x above it
+ *     (residual < 0).  If a secant step falls outside this bracket it is replaced by the middle of
+ *     the bracket, so the search can never run away.
+ * A correlation with a tiny jump (where one formula hands over to the next) has no exact answer; the
+ * bracket then closes on the jump, and that is accepted if the residual on both sides is below
+ * 0.5 psi or 0.3 % of the pressure, whichever is larger.  jump_fraction > 0 allows a larger jump, as
+ * that fraction of the pressure change of the step (see JUMPY_CORRELATIONS).
+ *
+ * Returns [bottom pressure, the correlation's result].
+ * @param {GradientFn} gradient @param {Fluid} fluid @param {number} rate @param {number} p_top
+ * @param {number} t_avg @param {Step} s @param {number} roughness_in @param {number} [jump_fraction]
+ * @returns {[number, any]}
+ */
+export function stepBottomPressure(gradient, fluid, rate, p_top, t_avg, s, roughness_in, jump_fraction = 0.0) {
+  const tol = 0.01;                                   // psi
+
+  /** @returns {[number, any]} */
+  const residual = (/** @type {number} */ x) => {
+    const p_avg = Math.max(0.5 * (p_top + x), 14.7);
+    const c = s.inj_scfd                              // gas lift gas is in the flow above the injection point
+      ? /** @type {OilWaterFluid} */ (fluid).conditions(rate, p_avg, t_avg, s.id_in, s.inj_scfd)
+      : fluid.conditions(rate, p_avg, t_avg, s.id_in);
+    const res = gradient(p_avg, s.angle_deg, s.id_in, roughness_in, c);
+    const p_new = Math.min(Math.max(p_top + res.dpdl * s.length, 1.0), P_MAX);
+    return [p_new - x, res];
+  };
+
+  let x = p_top + 0.4 * Math.max(s.tvd_bot - s.tvd_top, 1.0);
+  let [f, res] = residual(x);
+  /** @type {[number, number] | null} */
+  let below = null;                                   // [x, residual] of the bracket ends
+  /** @type {[number, number] | null} */
+  let above = null;
+  /** @type {number | null} */
+  let x_old = null;
+  let f_old = 0.0;
+  for (let it = 0; it < 60; it++) {
+    if (Math.abs(f) < tol) return [x + f, res];
+    if (f > 0 && (below === null || x > below[0])) below = [x, f];
+    if (f < 0 && (above === null || x < above[0])) above = [x, f];
+    if (below && above && above[0] - below[0] < tol) {        // bracket closed on a jump
+      if (Math.max(Math.abs(below[1]), Math.abs(above[1]))
+          < Math.max(0.5, 0.003 * x, jump_fraction * Math.abs(x - p_top))) {
+        return [0.5 * (below[0] + above[0]), res];
+      }
+      break;
+    }
+    let x_new;
+    if (x_old === null || f === f_old) {
+      x_new = x + f;                                  // plain repeat step
+    } else {
+      x_new = x - f * (x - x_old) / (f - f_old);      // secant step
+    }
+    // Only one side of the answer is known (for example a flow-pattern jump makes the residual
+    // negative on both sides of the jump, with the true answer further down).  The secant step may
+    // then just bounce between the same two points, so step away from the known side instead.
+    if (above && !below && x_new >= above[0]) {
+      x_new = above[0] - Math.max(2.0 * Math.abs(above[1]), 1.0);
+    } else if (below && !above && x_new <= below[0]) {
+      x_new = below[0] + Math.max(2.0 * Math.abs(below[1]), 1.0);
+    }
+    if (below && above && (!(below[0] < x_new && x_new < above[0]) || it % 2 === 1)) {
+      x_new = 0.5 * (below[0] + above[0]);            // keep inside the bracket; every second step
+                                                      // halves it (secant steps alone close very
+                                                      // slowly on a jump)
+    }
+    x_new = Math.min(Math.max(x_new, 1.0), P_MAX);
+    x_old = x;
+    f_old = f;
+    x = x_new;
+    [f, res] = residual(x);
+  }
+  throw new StepDidNotConverge(`Pressure did not converge in the step at MD ${s.md_top.toFixed(0)} ft.`);
+}
+
+/**
+ * The error stepBottomPressure throws when it cannot find the bottom pressure of a step.  It has its
+ * own class so that stepWithSplit can catch exactly this and not swallow a real mistake, the way the
+ * Python catches RuntimeError and not ValueError.
+ */
+export class StepDidNotConverge extends Error {
+  /** @param {string} message */
+  constructor(message) {
+    super(message);
+    this.name = "StepDidNotConverge";
+  }
+}
+
+/**
+ * stepBottomPressure(), but a step that has no solution is cut in two halves and each half solved.
+ *
+ * A correlation whose flow-pattern boundary makes a big jump in the gradient (Ansari, from annular to
+ * slug at a low pressure and a high gas rate, jumps by about 0.17 psi/ft) can have no solution at all
+ * in a 100 ft step: the bottom pressure would need to sit exactly on the boundary.  The jump in the
+ * residual is the gradient jump times the step length, so a shorter step has a smaller jump, and
+ * after one or two halvings it is small enough to accept.  The halves are solved one after the other,
+ * the second starting from the bottom of the first.  The returned result has the length-weighted
+ * holdup, hydrostatic and friction gradients of the two halves, so the totals stay correct.
+ * @param {GradientFn} gradient @param {Fluid} fluid @param {number} rate @param {number} p_top
+ * @param {number} t_avg @param {Step} s @param {number} roughness_in @param {number} [jump_fraction]
+ * @param {number} [depth] @returns {[number, any]}
+ */
+export function stepWithSplit(gradient, fluid, rate, p_top, t_avg, s, roughness_in,
+                              jump_fraction = 0.0, depth = 0) {
+  try {
+    return stepBottomPressure(gradient, fluid, rate, p_top, t_avg, s, roughness_in, jump_fraction);
+  } catch (err) {
+    if (!(err instanceof StepDidNotConverge)) throw err;
+    if (depth >= 5) throw err;                      // 100 ft cut into 3 ft pieces and still no answer
+  }
+  const md_mid = 0.5 * (s.md_top + s.md_bot);
+  const tvd_mid = 0.5 * (s.tvd_top + s.tvd_bot);
+  const upper = { ...s, md_bot: md_mid, tvd_bot: tvd_mid, length: 0.5 * s.length };
+  const lower = { ...s, md_top: md_mid, tvd_top: tvd_mid, length: 0.5 * s.length };
+  const [p_mid, res_upper] = stepWithSplit(gradient, fluid, rate, p_top, t_avg, upper,
+                                           roughness_in, jump_fraction, depth + 1);
+  const [p_bot, res_lower] = stepWithSplit(gradient, fluid, rate, p_mid, t_avg, lower,
+                                           roughness_in, jump_fraction, depth + 1);
+  const res = { ...res_lower };
+  for (const key of ["hl", "hydrostatic", "friction"]) {
+    res[key] = 0.5 * ((res_upper[key] ?? 0.0) + (res_lower[key] ?? 0.0));
+  }
+  return [p_bot, res];
+}
+
+export const MULTIPLIER_MIN = 0.1;      // sanity limits for the VLP multipliers
+export const MULTIPLIER_MAX = 10.0;
+
+/**
+ * Wrap a gradient function so that its gravity and friction parts are scaled.
+ *
+ * This is what the industry calls "VLP matching": no correlation fits every well, so the gravity
+ * (hydrostatic) part and the friction part of the pressure drop can each be multiplied by a number
+ * found by matching measured data.  1.0 and 1.0 leave the correlation unchanged.
+ *
+ * Every correlation builds its gradient the same way,
+ *     dpdl = (hydrostatic + friction) / (1 - e_k)      (e_k = the small acceleration term)
+ * so the multipliers go in at exactly that place.
+ * @param {GradientFn} gradient @param {number} gravity_mult @param {number} friction_mult
+ * @returns {GradientFn}
+ */
+export function withMultipliers(gradient, gravity_mult, friction_mult) {
+  if (gravity_mult === 1.0 && friction_mult === 1.0) return gradient;
+  return (p, angle_deg, d_in, roughness_in, c) => {
+    const res = { ...gradient(p, angle_deg, d_in, roughness_in, c) };
+    res.hydrostatic *= gravity_mult;
+    res.friction *= friction_mult;
+    res.dpdl = (res.hydrostatic + res.friction) / (1.0 - res.e_k);
+    return res;
+  };
+}
+
+/**
+ * Calculate pressure and temperature down the well for one rate.
+ *
+ *   well        a well from well.js
+ *   fluid       OilWaterFluid or GasFluid
+ *   rate        STB/d of liquid (oil + water) for OilWaterFluid, Mscf/d for GasFluid
+ *   p_wh        wellhead flowing pressure (psia)
+ *   correlation one of the keys of GRADIENT_FUNCS
+ *   max_step_ft longest step; smaller = slower but a little more accurate
+ *   gravity_mult, friction_mult   VLP matching multipliers; 1.0 = none
+ *
+ * Returns lists (wellhead first): md, tvd, p, T, plus 'holdup' and 'regime' (one value per step) and
+ * 'pwf' = the pressure at the perforations.  It also gives 'dp_hydrostatic' and 'dp_friction' (psi,
+ * added up over the whole well): the usual "dP Gravity" and "dP Friction" split, with the rest of
+ * (pwf - p_wh) being the small acceleration term.
+ * @param {Well} well @param {Fluid} fluid @param {number} rate @param {number} p_wh
+ * @param {string} [correlation] @param {number} [max_step_ft]
+ * @param {number} [gravity_mult] @param {number} [friction_mult]
+ */
+export function pressure_traverse(well, fluid, rate, p_wh, correlation = "beggs_brill",
+                                  max_step_ft = 100.0, gravity_mult = 1.0, friction_mult = 1.0) {
+  check(correlation in GRADIENT_FUNCS, `Unknown VLP correlation: ${correlation}`);
+  check(rate > 0, "Rate must be > 0.");
+  check(p_wh > 0, "Wellhead pressure must be > 0.");
+  check(MULTIPLIER_MIN <= gravity_mult && gravity_mult <= MULTIPLIER_MAX,
+        `The gravity multiplier must be between ${MULTIPLIER_MIN} and ${MULTIPLIER_MAX}.`);
+  check(MULTIPLIER_MIN <= friction_mult && friction_mult <= MULTIPLIER_MAX,
+        `The friction multiplier must be between ${MULTIPLIER_MIN} and ${MULTIPLIER_MAX}.`);
+  const gradient = withMultipliers(GRADIENT_FUNCS[correlation], gravity_mult, friction_mult);
+
+  const oil = /** @type {OilWaterFluid} */ (fluid);
+  const inj_rate = oil.injection_gas_rate ?? 0.0;               // gas lift gas, Mscf/d (0 = none)
+  const inj_md = oil.injection_md ?? null;
+  /** @type {Step[]} */
+  let steps;
+  const perf_md = well.md[well.md.length - 1];
+  if (inj_rate > 0.0) {
+    check(inj_md !== null && 0.0 < inj_md && inj_md < perf_md,
+          `The gas injection depth (${Number(inj_md).toLocaleString("en-US", { maximumFractionDigits: 0 })} ft) `
+          + `must be above the perforations (${perf_md.toLocaleString("en-US", { maximumFractionDigits: 0 })} ft) `
+          + "and below the surface.");
+    steps = buildSteps(well, max_step_ft, [/** @type {number} */ (inj_md)]);
+    for (const s of steps) {          // steps above the injection point carry the lift gas
+      s.inj_scfd = s.md_bot <= /** @type {number} */ (inj_md) + 1e-6 ? inj_rate * 1000.0 : 0.0;
+    }
+  } else {
+    steps = buildSteps(well, max_step_ft);
+  }
+  let [massRate, cpValue] = fluid.thermalData(rate);
+  /** @type {number | number[]} */
+  let mass_rate = massRate;
+  /** @type {number | number[]} */
+  let cp = cpValue;
+  if (inj_rate > 0.0) {
+    const [m_i, cp_i] = oil.injectedThermal();
+    const above = steps.map((s) => (s.inj_scfd ?? 0.0) > 0.0);
+    const masses = above.map((a) => (a ? massRate + m_i : massRate));
+    mass_rate = masses;
+    cp = above.map((a, k) => (a ? (cpValue * (masses[k] - m_i) + cp_i * m_i) / masses[k] : cpValue));
+  }
+  const temps = fluidTemperatures(well, steps, mass_rate, cp);
+
+  const md_list = [steps[0].md_top];
+  const tvd_list = [steps[0].tvd_top];
+  const p_list = [p_wh];
+  /** @type {number[]} */
+  const holdups = [];
+  /** @type {string[]} */
+  const regimes = [];              // the flow pattern the correlation reports in each step
+  let dp_hydrostatic = 0.0;        // psi, added up step by step
+  let dp_friction = 0.0;
+
+  let p_top = p_wh;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const t_avg = 0.5 * (temps[i] + temps[i + 1]);
+    const [p_bot, res] = stepWithSplit(gradient, fluid, rate, p_top, t_avg, s, well.roughness_in,
+                                       JUMPY_CORRELATIONS[/** @type {keyof typeof JUMPY_CORRELATIONS} */ (correlation)] ?? 0.0);
+    md_list.push(s.md_bot);
+    tvd_list.push(s.tvd_bot);
+    p_list.push(p_bot);
+    holdups.push(res.hl);
+    regimes.push(res.regime ?? "");
+    dp_hydrostatic += (res.hydrostatic ?? 0.0) * s.length;
+    dp_friction += (res.friction ?? 0.0) * s.length;
+    p_top = p_bot;
+  }
+
+  return { md: md_list, tvd: tvd_list, p: p_list, T: temps,
+           holdup: holdups, regime: regimes, pwf: p_list[p_list.length - 1],
+           dp_hydrostatic, dp_friction };
+}
+
+/**
+ * Flowing bottom-hole pressure (psia) for each rate in `rates` (all rates must be > 0).  Returns an
+ * array of the same length.
+ * @param {Well} well @param {Fluid} fluid @param {number[]} rates @param {number} p_wh
+ * @param {string} [correlation] @param {number} [max_step_ft]
+ * @param {number} [gravity_mult] @param {number} [friction_mult]
+ */
+export function vlp_curve(well, fluid, rates, p_wh, correlation = "beggs_brill", max_step_ft = 100.0,
+                          gravity_mult = 1.0, friction_mult = 1.0) {
+  return rates.map((q) => pressure_traverse(well, fluid, q, p_wh, correlation, max_step_ft,
+                                            gravity_mult, friction_mult).pwf);
 }

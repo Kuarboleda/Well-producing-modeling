@@ -20,6 +20,7 @@ replaces it yet.
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
 | `vlp.js` | translation of `vlp.py`, **in progress**: all eight gradient correlations - friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros, Ansari, Mukherjee and Brill, Fancher and Brown |
+| `well.js` | translation of `well.py`: the survey, cutting the well into steps, the temperature profile |
 | `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
 | `tools/dump_pvt.py`, `tools/dump_ipr.py` | run the PYTHON engine over thousands of cases and save the answers |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
@@ -34,10 +35,10 @@ cross-checked before the next begins:
 3. **done** - Orkiszewski (1967), Duns and Ros (1963) with its eight chart tables
 4. **done** - Ansari et al. (1994) including the slug-flow blend, Mukherjee and Brill
    (1983/1985), Fancher and Brown (1963): all eight correlations are now translated
-5. the fluid objects, the pressure traverse and the step solver
+5. **done** - `well.js` (survey, steps, temperature profile), the fluid objects
+   (`OilWaterFluid`, `GasFluid`), the step solver and the pressure traverse
 
-After that: the nodal solver, gas lift, and the rest of the screens. Until the traverse lands there is
-no operating point, so the page draws the inflow only.
+After that: the nodal solver, gas lift, and the rest of the screens.
 
 ## How the JavaScript is kept honest
 
@@ -55,7 +56,7 @@ node tools/crosscheck.mjs
 Every function keeps the same name and the same argument order on both sides, so the comparison needs
 no knowledge of the physics. The tolerance is 1e-9 (about ten decimal places).
 
-As of 20 Nov 2026: **35,924 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
+As of 20 Nov 2026: **36,473 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
 floating-point rounding. Most IPR functions agree exactly, to the last bit.
 
 This is not a formality. Within the first ten minutes it found a real bug in the Python: `pb_petrosky`
