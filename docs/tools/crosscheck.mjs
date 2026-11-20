@@ -15,6 +15,7 @@ import * as pvt from "../pvt.js";
 import * as ipr from "../ipr.js";
 import * as vlp from "../vlp.js";
 import * as wellmod from "../well.js";
+import * as nodal from "../nodal.js";
 
 // ---------------------------------------------------------------------
 // The traverse takes a well and a fluid object, which the Python side wrote out as plain
@@ -122,7 +123,55 @@ const MAP = {
   // ---- the fluids and the traverse ----
   fluid_conditions: fluidConditions, fluid_thermal: fluidThermal,
   pressure_traverse: traverse, vlp_curve: vlpCurve,
+  // ---- nodal.py / nodal.js ----
+  // The Python passes the IPR as a function and this side by name, so the name travels in the case
+  // and both look it up their own way; everything else is the same numbers in the same order.
+  solve_well: (w, f, ...rest) => nodal.solve_well(build(w), build(f), ...rest),
+  curves: (w, f, ...rest) => nodal.curves(build(w), build(f), ...rest),
+  match_vlp_multiplier: (w, f, ...rest) => nodal.match_vlp_multiplier(build(w), build(f), ...rest),
+  match_vlp_survey: (w, f, ...rest) => nodal.match_vlp_survey(build(w), build(f), ...rest),
+  find_operating_point_demo: findOperatingPointDemo,
+  fluid_at_rate_demo: fluidAtRateDemo,
+  sensitivity_demo: sensitivityDemo,
+  sensitivity_tubing_demo: sensitivityTubingDemo,
+  well_with_tubing_id_demo: (w, id_in) => nodal.well_with_tubing_id(build(w), id_in),
 };
+
+// ---- the demo wrappers, one for each in dump_nodal.py -----------------
+
+/** A straight IPR of the given AOF and a J-shaped VLP pwf = a q^2 + b q + c. */
+function findOperatingPointDemo(aof, pr, a, b, c, n_grid, q_min_frac) {
+  return nodal.find_operating_point((pwf) => aof * (1.0 - pwf / pr),
+                                    (q) => a * q * q + b * q + c, n_grid, q_min_frac);
+}
+
+/** fluid_at_rate(), reporting the fields that can change so they compare as numbers. */
+function fluidAtRateDemo(fluid_spec, ipr_name, p_res, ipr_inputs, q) {
+  const f = nodal.fluid_at_rate(build(fluid_spec), ipr_name, p_res, ipr_inputs, q);
+  if (ipr_name === "gas_multilayer") return { cgr: f.cgr, wgr: f.wgr, gas_sg: f.gas_sg };
+  return { water_cut: f.water_cut, gor: f.gor };
+}
+
+/** The solve inputs, built from the plain list the Python side writes out. */
+function baseInputs(base) {
+  const [well_s, fluid_s, ipr_name, p_res, ipr_inputs, p_wh, corr, step, n_grid, gm, fm] = base;
+  return { well: build(well_s), fluid: build(fluid_s), ipr_name, p_res,
+           ipr_inputs: { ...ipr_inputs }, p_wh, correlation: corr, max_step_ft: step,
+           n_grid, gravity_mult: gm, friction_mult: fm };
+}
+
+function sensitivityDemo(base, name, values, with_curves, n_points) {
+  return nodal.sensitivity(baseInputs(base), name, values, with_curves, n_points);
+}
+
+/** The tubing-size sensitivity: each value is a whole new well, and the row carries the diameter. */
+function sensitivityTubingDemo(base, ids, n_points) {
+  const inputs = baseInputs(base);
+  const wells = ids.map((d) => nodal.well_with_tubing_id(inputs.well, d));
+  const rows = nodal.sensitivity(inputs, "well", wells, false, n_points);
+  rows.forEach((row, i) => { row.value = ids[i]; });
+  return rows;
+}
 
 /**
  * Fields whose whole job is to be zero, so a RELATIVE comparison of them is meaningless: they are a
@@ -169,9 +218,9 @@ const TOLERANCE = 1e-9;          // ten decimal places: the two should differ on
 
 function main() {
   const files = ["tools/pvt_expected.json", "tools/ipr_expected.json",
-                 "tools/vlp_expected.json"].filter(existsSync);
+                 "tools/vlp_expected.json", "tools/nodal_expected.json"].filter(existsSync);
   if (files.length === 0) {
-    console.error("No expected-answer file found. Run first:\n  PYTHONPATH=.. python3 tools/dump_pvt.py tools/pvt_expected.json\n  PYTHONPATH=.. python3 tools/dump_ipr.py tools/ipr_expected.json\n  PYTHONPATH=.. python3 tools/dump_vlp.py tools/vlp_expected.json");
+    console.error("No expected-answer file found. Run first:\n  PYTHONPATH=.. python3 tools/dump_pvt.py tools/pvt_expected.json\n  PYTHONPATH=.. python3 tools/dump_ipr.py tools/ipr_expected.json\n  PYTHONPATH=.. python3 tools/dump_vlp.py tools/vlp_expected.json\n  python3 tools/dump_nodal.py tools/nodal_expected.json");
     process.exit(2);
   }
 
@@ -183,12 +232,27 @@ function main() {
       const fn = MAP[row.func];
       if (!fn) { missing.add(row.func); continue; }
       total++;
+      // A case the Python refused on purpose (an input it rejects, a match that cannot be reached):
+      // the JavaScript must refuse it too, and the message is its own business.
+      const wantsError = row.want !== null && typeof row.want === "object" && "error" in row.want;
       let got;
       try {
         got = fn(...row.args);
       } catch (error) {
+        if (wantsError) {
+          const rec = byName.get(row.name) || { worst: 0, where: "", got: null, want: null, count: 0 };
+          rec.count++;
+          byName.set(row.name, rec);
+          continue;                 // both refused: that is agreement
+        }
         failures++;
         console.log(`  THREW  ${row.name}(${JSON.stringify(row.args)}) -> ${error.message}`);
+        continue;
+      }
+      if (wantsError) {
+        failures++;
+        console.log(`  SHOULD HAVE REFUSED  ${row.name}(${JSON.stringify(row.args)})`);
+        console.log(`         the Python raised ${row.want.error}; the JavaScript returned ${JSON.stringify(got)}`);
         continue;
       }
       const record = byName.get(row.name) || { worst: 0, where: "", got: null, want: null, count: 0 };
