@@ -592,6 +592,9 @@ let lastCase = null;
 function recalculate() {
   updateVisibility();
   updateCorrelationAdvice();
+  drawSketch();
+  setStale(true);
+  rememberInputs();
   let c;
   try {
     c = buildCase();
@@ -671,6 +674,8 @@ function calculate() {
 function runNodal() {
   const c = buildCase();
   lastCase = c;
+  hasNodalResults = true;
+  setStale(false);
   const pressureLabel = units.unitOf("pressure");
   const rateLabel = units.unitOf(c.rateUnit);
 
@@ -1348,6 +1353,196 @@ function runMatch() {
 }
 
 // ---------------------------------------------------------------------
+// The well drawing
+// ---------------------------------------------------------------------
+// A survey typed wrong, or a gas lift valve put below the perforations, is obvious in a picture and
+// invisible in a column of numbers.  The drawing is plain SVG, built from the same survey the
+// calculation uses, so it cannot show a different well from the one being solved.
+
+function drawSketch() {
+  const svg = document.getElementById("sketch");
+  const note = document.getElementById("sketch-note");
+  if (!svg) return;
+  /** @type {number[]} */
+  let md = [];
+  /** @type {number[]} */
+  let tvd = [];
+  try {
+    [md, tvd] = pick("survey_mode") === "vertical"
+      ? wellmod.verticalSurvey(eng("depth"))
+      : surveyFromText();
+  } catch (error) {
+    svg.innerHTML = "";
+    if (note) note.textContent = /** @type {Error} */ (error).message;
+    return;
+  }
+
+  // the horizontal distance along the well, worked out from MD and TVD step by step
+  const reach = [0];
+  for (let i = 1; i < md.length; i++) {
+    const dmd = md[i] - md[i - 1];
+    const dtvd = tvd[i] - tvd[i - 1];
+    reach.push(reach[i - 1] + Math.sqrt(Math.max(dmd * dmd - dtvd * dtvd, 0)));
+  }
+
+  const W = 300;
+  const H = 200;
+  const pad = { l: 16, r: 16, t: 20, b: 14 };
+  const maxX = Math.max(...reach, 1);
+  const maxY = Math.max(...tvd, 1);
+  // one scale for both directions, so a deviated well looks deviated and a vertical one looks vertical
+  const scale = Math.min((W - pad.l - pad.r) / Math.max(maxX, maxY * 0.35),
+                         (H - pad.t - pad.b) / maxY);
+  const x = (/** @type {number} */ r) => pad.l + r * scale;
+  const y = (/** @type {number} */ d) => pad.t + d * scale;
+  const path = md.map((_, i) => `${i === 0 ? "M" : "L"}${x(reach[i]).toFixed(1)},${y(tvd[i]).toFixed(1)}`).join(" ");
+
+  const lengthLabel = units.unitOf("length");
+  const shown = (/** @type {number} */ ft) => show(units.fromEngine("length", ft), 0);
+  const parts = [
+    `<line class="ground" x1="0" y1="${y(0)}" x2="${W}" y2="${y(0)}"/>`,
+    `<text x="${x(0) + 4}" y="${y(0) - 6}">wellhead</text>`,
+    `<path class="hole" d="${path}" stroke-width="7" stroke-linecap="round"/>`,   // the hole
+    `<path class="tube" d="${path}"/>`,                                            // the tubing in it
+  ];
+
+  // the perforations, at the bottom of the survey
+  const last = md.length - 1;
+  parts.push(`<line class="perf" x1="${x(reach[last]) - 7}" y1="${y(tvd[last])}" `
+    + `x2="${x(reach[last]) + 7}" y2="${y(tvd[last])}"/>`);
+  parts.push(`<text x="${Math.min(x(reach[last]) + 10, W - 70)}" y="${y(tvd[last]) + 3}">`
+    + `perforations ${shown(md[last])} ${lengthLabel} MD</text>`);
+
+  // the gas lift injection point, if there is one
+  /** @type {string[]} */
+  const notes = [];
+  if (pick("lift") === "continuous") {
+    const inj = eng("gl_md");
+    if (inj > 0 && inj < md[last]) {
+      const injTvd = wellmod.tvd_at({ md, tvd, tubing: [[0, md[last], 1]], t_reservoir: 100,
+                                      roughness_in: 0, ambient_table: [[0, 80, 5]] }, inj);
+      // where along the well that depth is, by interpolating the reach on MD
+      let i = 0;
+      while (i < md.length - 2 && md[i + 1] < inj) i += 1;
+      const f = (inj - md[i]) / (md[i + 1] - md[i]);
+      const injReach = reach[i] + f * (reach[i + 1] - reach[i]);
+      parts.push(`<line class="inj" x1="${x(injReach) - 9}" y1="${y(injTvd)}" `
+        + `x2="${x(injReach) + 9}" y2="${y(injTvd)}"/>`);
+      parts.push(`<text x="${Math.min(x(injReach) + 12, W - 60)}" y="${y(injTvd) + 3}">`
+        + `gas lift ${shown(inj)} ${lengthLabel} MD</text>`);
+    } else {
+      notes.push("The gas lift injection depth is not above the perforations.");
+    }
+  }
+
+  svg.innerHTML = parts.join("");
+  const deviation = Math.max(...md.map((_, i) => reach[i]));
+  notes.unshift(`${shown(md[last])} ${lengthLabel} along the well, `
+    + `${shown(tvd[last])} ${lengthLabel} straight down`
+    + (deviation > 1 ? `, ${shown(deviation)} ${lengthLabel} sideways` : " (vertical)")
+    + `, ${num("tubing_id")} in tubing.`);
+  if (note) note.textContent = notes.join(" ");
+}
+
+// ---------------------------------------------------------------------
+// Are the answers on screen still the answers to what is in the boxes?
+// ---------------------------------------------------------------------
+// The tubing side waits for the Calculate button, so the page can show an operating point for a well
+// that has since been edited.  That is how a wrong number ends up in a report, so the moment an input
+// changes the answers go grey and the bar says to press Calculate again.
+
+let resultsAreStale = false;
+
+/** @param {boolean} stale */
+function setStale(stale) {
+  resultsAreStale = stale;
+  const marker = document.getElementById("stale");
+  const main = document.querySelector("main.main");
+  // nothing to go stale until the tubing has been calculated at least once
+  const show_it = stale && hasNodalResults;
+  if (marker) marker.classList.toggle("hidden", !show_it);
+  if (main) main.classList.toggle("stale-results", show_it);
+}
+
+let hasNodalResults = false;
+
+// ---------------------------------------------------------------------
+// Remembering the well in this browser
+// ---------------------------------------------------------------------
+// There is no server and no login, so a refresh would otherwise throw the well away.  The inputs are
+// kept in this browser only: they never leave the machine, and another person opening the page sees
+// the starting values.  Every read and write is wrapped, because browser storage can be switched off
+// or full, and the page must work either way.
+
+const STORE_KEY = "iwmt.inputs.v1";
+
+function rememberInputs() {
+  try {
+    /** @type {Record<string, string>} */
+    const data = {};
+    for (const id of ALL_IDS) {
+      const node = document.getElementById(id);
+      if (!node) continue;
+      data[id] = node instanceof HTMLInputElement && node.type === "checkbox"
+        ? String(node.checked)
+        : /** @type {HTMLInputElement} */ (node).value;
+    }
+    data._unit_system = units.system();
+    data._by_hand = String(correlationPickedByHand);
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+  } catch {
+    // storage off, private window, or full: the page works without it
+  }
+}
+
+/** Put back whatever was remembered.  @returns {boolean} whether anything was restored */
+function restoreInputs() {
+  /** @type {Record<string, string> | null} */
+  let data = null;
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    data = raw ? JSON.parse(raw) : null;
+  } catch {
+    return false;
+  }
+  if (!data || typeof data !== "object") return false;
+  try {
+    const system = units.asSystem(data._unit_system || "field");
+    if (system !== units.system()) {
+      units.setSystem(system);
+      /** @type {HTMLSelectElement} */ (el("unit_system")).value = system;
+    }
+    correlationPickedByHand = data._by_hand === "true";
+    fillCorrelationChoices();
+    for (const id of ALL_IDS) {
+      if (data[id] === undefined) continue;
+      const node = document.getElementById(id);
+      if (!node) continue;
+      if (node instanceof HTMLInputElement && node.type === "checkbox") {
+        node.checked = data[id] === "true";
+      } else {
+        /** @type {HTMLInputElement} */ (node).value = data[id];
+      }
+      noteTyped(id);
+    }
+    writeUnitLabels();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Put every input back to the value the page opens with. */
+function resetInputs() {
+  try {
+    localStorage.removeItem(STORE_KEY);
+  } catch {
+    // nothing to clear
+  }
+  location.reload();
+}
+
+// ---------------------------------------------------------------------
 // Save and open a case (a small file on the user's own computer)
 // ---------------------------------------------------------------------
 // There is no server, so "save" writes a file into the Downloads folder and "open" reads one back.
@@ -1451,6 +1646,16 @@ el("unit_system").addEventListener("change", (event) => {
   switchSystem(/** @type {HTMLSelectElement} */ (event.target).value);
 });
 el("btn-calc").addEventListener("click", calculate);
+// Enter anywhere in the form calculates, rather than doing nothing or submitting the form
+el("panel").addEventListener("keydown", (event) => {
+  const key = /** @type {KeyboardEvent} */ (event);
+  if (key.key !== "Enter") return;
+  const target = /** @type {HTMLElement} */ (key.target);
+  if (target instanceof HTMLTextAreaElement) return;      // a survey needs its line breaks
+  key.preventDefault();
+  calculate();
+});
+el("btn-reset").addEventListener("click", resetInputs);
 el("btn-sens").addEventListener("click", runSensitivity);
 el("btn-compare").addEventListener("click", compareToSurvey);
 el("btn-match").addEventListener("click", runMatch);
@@ -1484,4 +1689,14 @@ for (const [tab] of TABS) el(tab).addEventListener("click", () => showTab(tab));
 fillSensitivityChoices();
 fillCorrelationChoices();
 fillCorrelationTicks();
+// the well this browser was last working on, if there is one
+const restored = restoreInputs();
+fillSensitivityChoices();
+fillCorrelationTicks();
 recalculate();
+setStale(false);                 // nothing has been calculated yet, so nothing is out of date
+if (restored) {
+  message("messages", "This is the well you were last working on, remembered in this browser. "
+    + "<b>Reset</b> puts everything back to the starting values. Press <b>Calculate</b> to add the "
+    + "tubing, the operating point and the profile.", "");
+}

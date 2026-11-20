@@ -47,14 +47,32 @@
   header .units select { width: auto; margin: 0; padding: 5px 8px; font-size: 13px; color: var(--ink); }
 
   .layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
-  .panel {
+  .panel-wrap {
     flex: 0 0 350px;
     border-right: 1px solid var(--line);
     background: var(--panel);
-    padding: 14px 18px 28px;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
     min-height: calc(100vh - 120px);
   }
+  .panel { padding: 14px 18px 0; }
   .main { flex: 1 1 560px; padding: 14px 20px 32px; min-width: 0; }
+
+  /* The action bar stays in sight however far the inputs scroll.  Before this, Calculate sat about
+     2,000px down the page with the sections open: you changed a pressure at the top, scrolled three
+     screens to press the button, then scrolled back to read the answer. */
+  .actionbar {
+    position: sticky; bottom: 0; z-index: 5;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; margin-top: auto;
+    background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .actionbar .quiet { font-size: 12px; color: var(--ink-soft); padding: 6px 10px; }
+  .stale { font-size: 12px; color: #8a5a00; background: var(--warn-bg);
+           border: 1px solid var(--warn-line); border-radius: 4px; padding: 3px 7px; }
+  /* and the answers go grey while they belong to inputs that have since been changed */
+  .main.stale-results .charts, .main.stale-results #results { opacity: 0.45; }
 
   fieldset { border: none; margin: 0 0 14px; padding: 0; }
   legend {
@@ -93,6 +111,18 @@
   .panel details.group[open] > summary::before { content: "\25BE"; }
   .panel details.group > div { padding-top: 12px; }
   .hint { font-size: 12px; color: var(--ink-soft); margin: -4px 0 10px; }
+  /* The well drawing: a mistyped survey or an injection point below the perforations is obvious here
+     and invisible in a column of numbers. */
+  #sketch-box { margin: 0 0 12px; }
+  #sketch { width: 100%; height: 190px; display: block; background: #fff;
+            border: 1px solid var(--line); border-radius: 6px; }
+  #sketch text { font-size: 9px; fill: var(--ink-soft); }
+  #sketch .hole { fill: none; stroke: var(--ink-soft); stroke-width: 1; }
+  #sketch .tube { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+  #sketch .perf { stroke: #d1242f; stroke-width: 2; }
+  #sketch .inj { stroke: #1d8a7e; stroke-width: 2; stroke-dasharray: 4 3; }
+  #sketch .ground { stroke: var(--line); stroke-width: 1; }
+  #sketch-note { margin: 4px 0 0; }
   .advice {
     font-size: 12px; line-height: 1.45; margin: 6px 0 8px; padding: 8px 10px;
     border-left: 3px solid var(--ink-soft); background: #fff; border-radius: 3px;
@@ -103,6 +133,12 @@
   .advice b { font-weight: 650; color: var(--ink); }
 
   /* the tabs */
+  .guide { font-size: 13px; color: var(--ink-soft); margin: 0 0 14px; border: 1px solid var(--line);
+           border-radius: 6px; background: var(--panel); padding: 10px 12px; }
+  .guide > summary { cursor: pointer; font-weight: 600; color: var(--ink); }
+  .guide ol { margin: 10px 0 0; padding-left: 22px; }
+  .guide li { margin-bottom: 6px; }
+  .guide b { color: var(--ink); }
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
   .tabs button {
     border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0;
@@ -147,7 +183,18 @@
   details.more summary { cursor: pointer; }
   footer { border-top: 1px solid var(--line); padding: 14px 20px; font-size: 12px; color: var(--ink-soft); }
   @media (max-width: 760px) {
-    .panel { flex: 1 1 100%; border-right: none; border-bottom: 1px solid var(--line); min-height: 0; }
+    /* On a phone the inputs are one long form, and the charts used to start 2,163px down it: you
+       scrolled past every box before seeing a single answer.  So the answers come first, and the
+       action bar stays pinned at the bottom of the screen wherever you are. */
+    .layout { flex-direction: column; }
+    .main { order: 1; flex: 1 1 100%; }
+    .panel-wrap { order: 2; flex: 1 1 100%; border-right: none;
+                  border-top: 1px solid var(--line); min-height: 0; }
+    .panel { padding-bottom: 8px; }
+    .actionbar { position: fixed; left: 0; right: 0; bottom: 0; margin: 0;
+                 box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08); }
+    body { padding-bottom: 64px; }
+    .charts > div { flex: 1 1 100%; }
   }
 </style>
 </head>
@@ -156,7 +203,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 20 Nov 2026 11:48 (7e0330c)</span>
+  <span class="sub build" id="build">build 20 Nov 2026 12:20 (f3ce0d8)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -170,6 +217,7 @@
 </header>
 
 <div class="layout">
+  <div class="panel-wrap">
   <form class="panel" id="panel" autocomplete="off">
 
     <!-- ============== RESERVOIR AND IPR ============== -->
@@ -422,6 +470,11 @@
     <details class="group" id="grp-equip">
       <summary>Equipment</summary>
       <div>
+        <div id="sketch-box">
+          <svg id="sketch" viewBox="0 0 300 200" role="img"
+               aria-label="Drawing of the well: its path, the tubing and the perforations"></svg>
+          <p class="hint" id="sketch-note"></p>
+        </div>
         <label>Well path
           <select id="survey_mode">
             <option value="vertical">Vertical</option>
@@ -528,10 +581,42 @@
       </details>
     </fieldset>
 
-    <button type="button" id="btn-calc" class="primary">Calculate</button>
   </form>
 
+  <div class="actionbar">
+    <button type="button" id="btn-calc" class="primary">Calculate</button>
+    <span id="stale" class="stale hidden">inputs changed &mdash; press Calculate</span>
+    <button type="button" id="btn-reset" class="quiet" title="Put every input back to its starting value">Reset</button>
+  </div>
+  </div>
+
   <main class="main">
+    <details class="guide" id="guide">
+      <summary>How to use this page</summary>
+      <ol>
+        <li><b>Fill in the well on the left.</b> It opens with a complete example well, so you can
+          press Calculate straight away and change things afterwards. The four sections hold the
+          reservoir and inflow model, the fluid, the equipment and well path, and gas lift.</li>
+        <li><b>The VLP correlation chooses itself</b> from the fluid, the water cut, the oil gravity
+          and the well path, and the note under it says why. Pick a different one whenever you like;
+          the app then stops choosing for you and offers a button back to its suggestion.</li>
+        <li><b>Press Calculate.</b> The inflow curve redraws as you type, but the tubing side takes
+          about a third of a second, so it waits for the button. When an input changes afterwards,
+          the answers go grey until you press it again.</li>
+        <li><b>IPR / VLP and P-T profiles</b> shows where the two curves cross &mdash; the rate the
+          well flows at &mdash; and the pressure and temperature down the tubing at that rate.</li>
+        <li><b>Sensitivity</b> repeats the whole calculation for several values of one input, so you
+          can see what a bigger tubing or a lower wellhead pressure is worth.</li>
+        <li><b>VLP comparison and matching</b> is where a measurement comes in. Enter a downhole
+          gauge reading or a flowing gradient survey and the app shows how close each correlation
+          comes, then matches the one you keep. No correlation is right until it is checked against
+          something measured.</li>
+      </ol>
+      <p><b>Save case</b> writes the well to a small file on your computer, and <b>Open case</b>
+        reads one back. The well you are working on is also remembered in this browser, so a refresh
+        does not lose it; <b>Reset</b> puts everything back to the starting values.</p>
+    </details>
+
     <div class="tabs" role="tablist">
       <button type="button" role="tab" id="tab-nodal" aria-selected="true">IPR / VLP and P-T profiles</button>
       <button type="button" role="tab" id="tab-sens" aria-selected="false">Sensitivity</button>
@@ -717,6 +802,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=7e0330c"></script>
+<script type="module" src="app.js?v=f3ce0d8"></script>
 </body>
 </html>

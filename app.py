@@ -61,7 +61,9 @@ st.markdown(f'<div class="byline">by <b>Vu Huu Huy</b> in collaboration with {_c
 
 # Names shown on the page -> names used inside the code
 SURVEY_COLUMNS = ["MD (ft)", "TVD (ft)"]
-LIFT_CHOICES = {"None": "none", "Gas lift": "continuous", "ESP": "esp"}
+# Artificial lift offered by the app.  ESP was listed here as a placeholder and has been dropped:
+# this app covers natural flow and continuous gas lift.
+LIFT_CHOICES = {"None": "none", "Gas lift": "continuous"}
 OIL_IPR = {"PI entry (default)": "pi", "Vogel": "vogel", "Darcy": "darcy", "Fetkovich": "fetkovich",
            "Multilayer (commingled)": "multilayer",
            "Horizontal well (Joshi)": "horizontal",
@@ -543,8 +545,6 @@ with st.sidebar:
         st.markdown('<div class="section-name">Artificial lift</div>', unsafe_allow_html=True)
         lift_label = st.selectbox("Artificial lift", list(LIFT_CHOICES), label_visibility="collapsed")
         inp["lift"] = LIFT_CHOICES[lift_label]
-        if inp["lift"] == "esp":
-            st.caption("ESP design is coming soon (see the ESP Design tab). It is not used in the calculation yet.")
     else:
         inp["lift"] = "none"
 
@@ -954,8 +954,8 @@ if "output" in st.session_state:
         notes.append(f"Commingled layers at the operating point: water cut {res['mix']['water_cut'] * 100:.1f} %, "
                      f"GOR {res['mix']['gor']:,.0f} scf/STB")
 
-    tab_charts, tab_sens, tab_vlp, tab_lift, tab_esp = st.tabs(
-        ["IPR / VLP and P-T profiles", "Sensitivity", "VLP comparison and matching", "Gas Lift Design", "ESP Design"])
+    tab_charts, tab_sens, tab_vlp, tab_lift = st.tabs(
+        ["IPR / VLP and P-T profiles", "Sensitivity", "VLP comparison and matching", "Gas Lift Design"])
 
     with tab_charts:
         # The two charts side by side: inflow/outflow curves on the left, profile on the right.
@@ -1352,11 +1352,6 @@ if "output" in st.session_state:
                     st.caption(f"Highest oil rate in this range: {glp['best']['q_oil']:,.0f} STB/d at "
                                f"{glp['best']['value']:,.0f} Mscf/d. Past the highest point, more gas only adds "
                                f"friction and the oil rate falls.")
-
-    with tab_esp:
-        st.subheader("ESP Design")
-        st.info("Coming soon: electrical submersible pump selection and design. Inputs for the ESP will be entered "
-                "in this tab.")
 
     # Older Streamlit without pop-up windows: the layer table opens here instead
     if open_multilayer_window is None and st.session_state.get("ml_inline"):

@@ -217,7 +217,7 @@ Your browser opens the page. Press **Calculate** after changing inputs.
   over a window of depth around the point, so a small step in the calculation cannot make it jump.
 * The page title is "Integrated Well Modelling Tool". To show a picture instead of the word "Claude" in the byline,
   put a small PNG at `assets/claude_logo.png` (next to `app.py`); it is picked up automatically.
-* **Gas lift** (continuous, oil wells): choose it under *Artificial lift* (the list is None / Gas lift / ESP). Inputs: gas injection rate, injection depth
+* **Gas lift** (continuous, oil wells): choose it under *Artificial lift* (the list is None / Gas lift). Inputs: gas injection rate, injection depth
   (measured depth of the valve or orifice), injected gas gravity and, optionally, the injection pressure at the
   wellhead (default 1,500 psig).
   Above the injection depth the tubing carries the formation gas plus the lift gas (their volumes, densities and
@@ -230,9 +230,6 @@ Your browser opens the page. Press **Calculate** after changing inputs.
   and the **Gas Lift Design** tab draws the gas lift performance curve (oil rate against injection rate, highest point marked).
   Not included: injection through several valves at once, gas lift gas temperature other than the tubing temperature,
   annulus (casing) flow.
-* **ESP** is in the *Artificial lift* list but only as a placeholder: choosing it shows a note and nothing is calculated.
-  The **ESP Design** tab is a placeholder ("coming soon") for the pump selection inputs and results. The gas lift inputs
-  needed for the IPR/VLP and sensitivity calculation (rate, depth, gas gravity, injection pressure) stay in the sidebar.
 * **Gas Lift Design tab** (oil and water wells; all its inputs are in the tab, pressures in psig). Three jobs, from
   Takacs, *Gas Lift Manual*, and API RP 11V6 (2nd ed. 1999):
   1. **Check the valves already in the well.** Enter the mandrels (MD, dummy / IPO valve / PPO valve / orifice, valve OD,
@@ -375,7 +372,8 @@ Your browser opens the page. Press **Calculate** after changing inputs.
 * The pressure step now cuts a step in halves when the correlation has no exact answer in it (a flow-pattern boundary with
   a big jump in the gradient: Ansari at a high GOR failed with "Pressure did not converge" before). The 100 ft steps agree
   with 25 ft steps within 1 % there (`test_vlp.py`).
-* Not yet: ESP design, a horizontal-well VLP (the lateral section), gas transient IPR, live well schematic.
+* Not included: ESP (this app covers natural flow and continuous gas lift only), a horizontal-well VLP (the lateral
+  section), gas transient IPR.
 
 ## Gas lift valve design: how it was tested
 

@@ -11,6 +11,8 @@ and it costs nothing no matter how many people use it.
 The Streamlit version in the folder above still works and is still the reference: every number this
 page produces is checked against it (see below).
 
+**Scope:** natural flow and continuous gas lift. ESP is not part of this app.
+
 **What the page does now:** the inflow (IPR) for every model, the tubing (VLP) with all eight
 correlations, the operating point where they cross, the pressure and temperature profile down the
 well, continuous gas lift, sensitivities on one input at a time, the correlation chosen for the well
@@ -19,6 +21,30 @@ gauge reading or flowing gradient survey, and matching the chosen one to that da
 metric units. Still to come: the gas lift valve design, the ESP design, PVT matching to laboratory
 data, horizontal-well and multilayer inflow on the screen (the engine behind them is already
 translated), and the survey table as a table rather than pasted text.
+
+## The interface, and why it is this shape
+
+A panel of inputs on the left and the answers on the right is what every nodal tool does, and it is
+what the Streamlit version does, so the two stay recognisably one app. What was wrong with it was
+measurable rather than a matter of taste, so it was measured:
+
+* With the input sections open on a 1366x768 laptop, **Calculate sat 2,055px down the page** - three
+  screens below the fold. You changed a pressure at the top, scrolled down to press the button, then
+  scrolled back to read the answer. It is now in a bar that sticks to the bottom of the panel and
+  never leaves the screen.
+* On a phone the first chart was **2,163px down**, so you scrolled past every input before seeing a
+  single answer. The answers now come first and the bar is fixed to the bottom of the screen; the
+  chart starts at 578px.
+* The tubing side waits for the button, so the page could show an operating point for a well that had
+  since been edited. Any input change now greys the answers and the bar says to press Calculate
+  again - a wrong number in a report is worse than a slow page.
+* **Enter** in any input box calculates. In the survey box it adds a line, as it must.
+* The Equipment section draws **the well**: its path, the tubing, the perforations and the gas lift
+  injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
+  the perforations is obvious in a picture and invisible in a column of numbers.
+* The well is **remembered in this browser** (and only there - nothing is sent anywhere), so a
+  refresh does not throw it away. **Reset** puts the starting values back. A first-time visitor sees
+  the starting well, not someone else's.
 
 ## Choosing the correlation
 
@@ -50,6 +76,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
 | `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
+| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the well drawing, the out-of-date marker, Enter, the remembered well, the phone layout (29 checks) |
 | `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
@@ -64,17 +91,6 @@ cross-checked before the next begins:
    (`OilWaterFluid`, `GasFluid`), the step solver and the pressure traverse
 
 After that: gas lift, PVT matching, and the rest of the screens.
-
-## "I refreshed and nothing changed"
-
-Almost always the browser showing a cached page. GitHub Pages serves every file with a ten-minute
-cache and there is no way to change that, so:
-
-* the page carries a **build marker** in the header, next to the title: the date and the commit it
-  was built from. If that marker is not the newest one, the browser is showing an old page.
-* **Ctrl+Shift+R** (or Cmd+Shift+R on a Mac) forces a fresh copy straight away. A plain refresh may
-  not.
-* `python3 tools/stamp.py` writes that marker; run it before committing a change to the page.
 
 ## How the JavaScript is kept honest
 

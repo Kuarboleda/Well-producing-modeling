@@ -446,7 +446,9 @@ check("and comes back as exactly 250", (await val("p_res")) === "250", await val
 await page.selectOption("#unit_system", "field");
 await page.waitForTimeout(200);
 
-// a fresh page must open with the same inputs as the Python app's DEFAULTS
+// A fresh page must open with the same inputs as the Python app's DEFAULTS.  browser.newPage() makes
+// its own browser context, so this page has empty storage and is a first-time visitor - which is the
+// point: the remembered-well feature must not change what a newcomer sees.
 const fresh = await browser.newPage();
 await fresh.goto(BASE, { waitUntil: "networkidle" });
 const defaults = { fluid_type: "oil", p_res: "3000", t_res: "200", oil_ipr: "pi", pi: "3",
