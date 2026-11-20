@@ -402,47 +402,6 @@ function recalculate() {
 }
 
 // ---------------------------------------------------------------------
-// Example wells
-// ---------------------------------------------------------------------
-
-/** @type {Record<string, Record<string, string>>} */
-const SAMPLES = {
-  oil_pi: { fluid_type: "oil", oil_ipr: "pi", p_res: "3000", t_res: "200", pi: "3", pb: "2484" },
-  oil_vogel: { fluid_type: "oil", oil_ipr: "vogel", p_res: "2200", t_res: "180",
-               vogel_q: "1500", vogel_pwf: "1100", pb: "2800" },
-  oil_darcy: { fluid_type: "oil", oil_ipr: "darcy", p_res: "3000", t_res: "200",
-               oil_k: "50", oil_h: "20", oil_bo: "1.25", oil_mu: "0.8",
-               oil_re: "1000", oil_rw: "0.354", oil_skin: "0", oil_regime: "pseudosteady", pb: "2484" },
-  gas_jones: { fluid_type: "gas", gas_ipr: "jones", p_res: "4500", t_res: "230",
-               gas_sg_g: "0.65", gas_k: "5", gas_h: "40", gas_re: "1000", gas_rw: "0.354",
-               gas_skin: "0", gas_beta: "0" },
-};
-
-function loadSample() {
-  const key = pick("sample");
-  const sample = SAMPLES[key];
-  if (!sample) return;
-  // the samples are written in oilfield units, so they are converted if the screen is in metric
-  const to = units.system();
-  for (const [id, value] of Object.entries(sample)) {
-    const quantity = QUANTITY_OF[id];
-    const number = Number(value);
-    if (quantity === null || quantity === undefined || !Number.isFinite(number) || to === "field") {
-      el(id).value = value;
-    } else {
-      const converted = units.convert(quantity, number, "field", to);
-      el(id).value = String(Number(converted.toFixed(units.decimalsFor(quantity, converted))));
-      // the sample's own number, in oilfield units, is the original: so switching to oilfield gives
-      // back the round figures the sample was written with
-      TYPED[id] = { value: number, system: "field" };
-      continue;
-    }
-    noteTyped(id);
-  }
-  recalculate();
-}
-
-// ---------------------------------------------------------------------
 // Save and open a case (a small file on the user's own computer)
 // ---------------------------------------------------------------------
 // There is no server, so "save" writes a file into the Downloads folder and "open" reads one back.
@@ -505,8 +464,6 @@ for (const id of ALL_IDS) {
   }
   noteTyped(id);               // the numbers the page opens with count as typed
 }
-el("sample").addEventListener("change", () => {});
-document.getElementById("btn-sample")?.addEventListener("click", loadSample);
 document.getElementById("btn-save")?.addEventListener("click", saveCase);
 document.getElementById("btn-open")?.addEventListener("click", () => el("file-open").click());
 el("file-open").addEventListener("change", openCase);

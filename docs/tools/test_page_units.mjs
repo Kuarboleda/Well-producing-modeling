@@ -43,14 +43,16 @@ const keysOf = (pairs) => pairs.map(([k]) => k).join(" | ");
 check("starts in Oilfield", (await val("unit_system")) === "field");
 check("pressure label says psig", (await labelOf("p_res")).includes("psig"), await labelOf("p_res"));
 
-// ---- 2. a Darcy oil well, entered in oilfield units ----
-await page.selectOption("#sample", "oil_darcy");
-await page.click("#btn-sample");
+// ---- 2. a Darcy oil well.  The page opens with the same default inputs as the Python app, so
+//         choosing the Darcy model is all that is needed. ----
+await page.selectOption("#oil_ipr", "darcy");
 await page.waitForTimeout(250);
 const fieldText = await results();
 const aofField = numberFrom(fieldText, "AOF");
 const jField = numberFrom(fieldText, "PI from the rock");
 check("field AOF is a sensible number", Number.isFinite(aofField) && aofField > 0, `AOF = ${aofField} STB/d`);
+// the Python gives 1,874 STB/d for these defaults, worked out by hand when pressures moved to psig
+check("field AOF agrees with the Python", near(aofField, 1874, 1e-3), `${aofField} STB/d`);
 check("field PI is a sensible number", Number.isFinite(jField) && jField > 0, `J = ${jField} STB/d/psi`);
 const fieldInputs = {};
 for (const id of ["p_res", "t_res", "oil_k", "oil_h", "oil_bo", "oil_mu", "oil_re", "oil_rw", "pb"]) {
@@ -120,24 +122,32 @@ check("back-pressure AOF is the same rate in e3m3/d",
       `${bpMetric} vs ${(bpField * 0.0283168).toFixed(2)} expected`);
 check("C label is now metric", (await labelOf("bp_c")).includes("bara^2n"), await labelOf("bp_c"));
 
-// ---- 6. a sample loaded while in metric must arrive in metric ----
-await page.selectOption("#sample", "oil_vogel");
-await page.click("#btn-sample");
-await page.waitForTimeout(250);
-check("sample loaded in metric is converted",       // the Vogel sample is 2,200 psig
-      near(Number(await val("p_res")), 2200 / 14.5037738, 1e-3), `${await val("p_res")} barg`);
-check("sample results are in m3/d", keysOf(await results()).includes("m3/d"));
-// switching back must give the sample's own round figure, not a rounded conversion of it
+// ---- 6. a number typed while in metric survives a round trip ----
+await setVal("p_res", "250");                    // 250 barg
+await page.waitForTimeout(200);
+const typedMetric = numberFrom(await results(), "Reservoir pressure");
+check("a pressure typed in metric is read as metric", near(typedMetric, 250, 1e-6), `${typedMetric} barg`);
 await page.selectOption("#unit_system", "field");
 await page.waitForTimeout(200);
-check("switching back gives exactly 2200 psig", (await val("p_res")) === "2200", await val("p_res"));
+check("250 barg reads as 3625.9 psig",
+      near(Number(await val("p_res")), 250 * 14.5037738, 1e-4), `${await val("p_res")} psig`);
+await page.selectOption("#unit_system", "metric");
+await page.waitForTimeout(200);
+check("and comes back as exactly 250", (await val("p_res")) === "250", await val("p_res"));
 
-// ---- 7. saving in metric and reopening restores metric ----
-const saved = await page.evaluate(() => {
-  const ids = [...document.querySelectorAll("input[type=number], select")].map((n) => n.id);
-  return ids.length > 0;
-});
-check("the page has inputs to save", saved);
+// ---- 7. the page opens with the Python app's own default inputs ----
+const fresh = await browser.newPage();
+await fresh.goto(BASE, { waitUntil: "networkidle" });
+const defaults = { fluid_type: "oil", p_res: "3000", t_res: "200", oil_ipr: "pi", pi: "3",
+                   pb: "2484", oil_k: "50", oil_h: "20", oil_bo: "1.25", oil_mu: "0.8",
+                   oil_re: "1000", oil_rw: "0.354", oil_skin: "0", oil_regime: "pseudosteady",
+                   gas_ipr: "jones", gas_sg_g: "0.65", gas_k: "5", gas_h: "40", gas_re: "1000",
+                   gas_rw: "0.354", gas_skin: "0", gas_beta: "0", bp_c: "0.015", bp_n: "0.85" };
+for (const [id, want] of Object.entries(defaults)) {
+  const got = await fresh.$eval(`#${id}`, (n) => n.value);
+  check(`default ${id} is ${want}`, got === want, got === want ? "" : `got ${got}`);
+}
+await fresh.close();
 
 await browser.close();
 console.log(bad === 0 ? "\nAll page checks passed." : `\n${bad} failure(s).`);

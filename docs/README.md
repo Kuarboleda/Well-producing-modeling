@@ -94,6 +94,9 @@ most in a file full of numbers.
 
 * **Pressure.** The engine works in psia throughout, exactly like the Python. Everything you see and
   type is psig. `units.js` is the only crossing point.
+* **The page opens with the same default inputs as the Python app** (`DEFAULTS` in
+  `app_helpers.py`), so a well can be read straight off it without entering anything. There is no
+  separate list of example wells: the defaults *are* the example.
 * **Two unit systems**, oilfield (the default) and metric, chosen from the box at the top right. The
   engine never learns that metric exists: it is always handed oilfield units and absolute pressure,
   so it stays line for line the same calculation as the Python. Everything the screen shows or reads
