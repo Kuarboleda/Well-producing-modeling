@@ -473,7 +473,11 @@ check(`all ${Object.keys(defaults).length} defaults match the Python DEFAULTS`, 
       wrong.join("; "));
 await fresh.close();
 
-// ---- 13. no errors anywhere ----
+// ---- 13. the build marker, so a cached page can be spotted ----
+const build = await page.$eval("#build", (n) => n.innerText);
+check("the page shows which build it is", /^build \d{2} \w{3} \d{4} \d{2}:\d{2} \(/.test(build), build);
+
+// ---- 14. no errors anywhere ----
 check("no page errors at all", errors.length === 0, errors.slice(0, 3).join(" | "));
 
 await browser.close();

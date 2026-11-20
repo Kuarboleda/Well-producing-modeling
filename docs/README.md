@@ -65,6 +65,17 @@ cross-checked before the next begins:
 
 After that: gas lift, PVT matching, and the rest of the screens.
 
+## "I refreshed and nothing changed"
+
+Almost always the browser showing a cached page. GitHub Pages serves every file with a ten-minute
+cache and there is no way to change that, so:
+
+* the page carries a **build marker** in the header, next to the title: the date and the commit it
+  was built from. If that marker is not the newest one, the browser is showing an old page.
+* **Ctrl+Shift+R** (or Cmd+Shift+R on a Mac) forces a fresh copy straight away. A plain refresh may
+  not.
+* `python3 tools/stamp.py` writes that marker; run it before committing a change to the page.
+
 ## How the JavaScript is kept honest
 
 The Python engine was checked against the SPE papers and against published reference cases. Rather

@@ -42,6 +42,7 @@
   header .sub { color: var(--ink-soft); font-size: 13px; }
   header .spacer { flex: 1 1 auto; }
   header button { font-size: 13px; }
+  header .build { font-variant-numeric: tabular-nums; opacity: 0.75; }
   header .units { font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; margin: 0; }
   header .units select { width: auto; margin: 0; padding: 5px 8px; font-size: 13px; color: var(--ink); }
 
@@ -155,6 +156,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
+  <span class="sub build" id="build">build 20 Nov 2026 11:48 (7e0330c)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -715,6 +717,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=7e0330c"></script>
 </body>
 </html>
