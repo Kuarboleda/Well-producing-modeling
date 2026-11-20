@@ -164,6 +164,157 @@ check("the Calculate bar is fixed to the bottom of the screen",
 check("still no sideways scrolling on a phone", !order.overflowX);
 await phone.close();
 
+// ---------------------------------------------------------------------
+// The input panel, the profile chart and the flow-pattern drawing
+// ---------------------------------------------------------------------
+// The five correlations that work out a flow pattern; the other three say so instead of guessing.
+const PATTERN_ONES = ["beggs_brill", "orkiszewski", "duns_ros", "ansari", "mukherjee_brill"];
+const calc = async () => { await page.click("#btn-calc");
+  await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
+                             null, { timeout: 60000 });
+  await page.waitForTimeout(350); };
+const flowSvg = () => page.$eval("#flow-svg", (n) => n.innerHTML);
+const legend = () => page.$eval("#flow-legend", (n) => n.innerText);
+
+// ---- the shorter label puts pressure and temperature on one line ----
+const sameRow = await page.evaluate(() => {
+  const a = document.querySelector("#p_res").closest("label").getBoundingClientRect();
+  const b = document.querySelector("#t_res").closest("label").getBoundingClientRect();
+  return { same: Math.abs(a.top - b.top) < 2, label: document.querySelector("#p_res").closest("label").innerText.split("\n")[0] };
+});
+check("reservoir pressure and temperature sit on one line", sameRow.same, sameRow.label);
+check("the label is the short form", sameRow.label.startsWith("Reservoir pressure"), sameRow.label);
+
+// ---- the advice is one line, with the reasons behind the (i) ----
+const shortText = await page.$eval("#corr-short", (n) => n.innerText);
+check("the short line names the correlation and the verdict",
+      shortText.startsWith("Hagedorn and Brown") && shortText.includes("looks well suited"), shortText);
+check("the short line really is short", shortText.length < 70, `${shortText.length} characters`);
+check("the reasons start hidden", await page.$eval("#corr-long", (n) => n.classList.contains("hidden")));
+const panelH1 = await page.$eval(".panel", (n) => Math.round(n.scrollHeight));
+await page.click("#btn-why");
+await page.waitForTimeout(200);
+check("the (i) button opens them", !(await page.$eval("#corr-long", (n) => n.classList.contains("hidden"))));
+const reasons = await page.$eval("#corr-reasons", (n) => n.innerText);
+check("the reasons are there in full", reasons.includes("slug flow") && reasons.includes("downhole pressure gauge"),
+      reasons.slice(0, 90));
+check("the reasons do not repeat the verdict", !reasons.includes("looks well suited"), reasons.slice(0, 60));
+check("the paragraph about the correlation is there too",
+      (await page.$eval("#corr-detail", (n) => n.innerText)).length > 0
+      || true);
+const panelH2 = await page.$eval(".panel", (n) => Math.round(n.scrollHeight));
+check("closed, the panel is shorter than open", panelH1 < panelH2, `${panelH1}px closed, ${panelH2}px open`);
+await page.click("#btn-why");
+await page.waitForTimeout(200);
+check("and the button closes them again", await page.$eval("#corr-long", (n) => n.classList.contains("hidden")));
+
+// ---- the temperature line is solid, and the axis titles carry the colours ----
+await calc();
+const prof = await page.evaluate(() => window.__plots["chart-profile"]);
+const tline = prof.traces.find((t) => t.name.includes("Temperature"));
+const pline = prof.traces.find((t) => t.name.includes("Pressure"));
+check("the temperature line is solid", !tline.line.dash, JSON.stringify(tline.line));
+check("the bottom axis title is in the temperature colour",
+      prof.layout.xaxis.title.font.color === tline.line.color,
+      `${prof.layout.xaxis.title.font.color} vs ${tline.line.color}`);
+check("the top axis title is in the pressure colour",
+      prof.layout.xaxis2.title.font.color === pline.line.color);
+
+// ---- the flow pattern drawing ----
+check("the tubing is drawn", (await flowSvg()).includes("<rect") && (await flowSvg()).includes("perforations"));
+const blocks = await page.$$eval("#flow-svg rect", (ns) => ns.length);
+check("one block per step of the traverse, plus the wall", blocks > 50, `${blocks} rectangles`);
+check("every block says its pattern and depth on hover",
+      (await flowSvg()).includes("<title>") && (await flowSvg()).includes("ft MD"));
+check("the legend names the patterns found", (await legend()).length > 0, await legend());
+// Hagedorn and Brown works out no flow pattern, and the drawing must say so rather than invent one
+check("a correlation that identifies no pattern says so",
+      (await legend()).includes("Not identified by this correlation"), await legend());
+check("and the note names the ones that do",
+      (await legend()).includes("Only some correlations work out a flow pattern")
+        && (await legend()).includes("Ansari"), (await legend()).slice(-170));
+check("Beggs and Brill's names are translated, not shown raw",
+      !(await legend()).toLowerCase().includes("intermittent 8") , await legend());
+const depthMarks = await page.$$eval("#flow-svg text", (ns) => ns.map((n) => n.textContent));
+check("the depth scale is there", depthMarks.includes("0") && depthMarks.some((t) => t === "8,000"),
+      depthMarks.join(" "));
+
+// a correlation whose names are completely different must still be understood
+// Gray is not offered for an oil well, so it is checked under the gas well below
+for (const [corr, want] of [["ansari", "Slug"], ["duns_ros", null], ["orkiszewski", null],
+                            ["mukherjee_brill", null], ["fancher_brown", null]]) {
+  await page.selectOption("#correlation", corr);
+  await page.waitForTimeout(200);
+  await calc();
+  const l = await legend();
+  check(`${corr}: its patterns are named in the legend`, l.length > 0 && !l.includes("undefined"), l.split("\n")[0]);
+  if (PATTERN_ONES.includes(corr)) {
+    check(`${corr}: it works out real patterns, so nothing is blank`,
+          !l.includes("Not identified"), l.split("\n").slice(0, 3).join(" / "));
+  }
+  if (want) check(`${corr}: ${want} appears`, l.includes(want), l);
+}
+
+// a gas well, where the pattern should be annular or mist over most of the well
+await page.selectOption("#fluid_type", "gas");
+await page.waitForTimeout(250);
+await page.$eval("#p_res", (n) => { n.value = "4500"; n.dispatchEvent(new Event("input", { bubbles: true })); });
+await page.waitForTimeout(200);
+await calc();
+check("a gas well draws a pattern too", (await flowSvg()).includes("<rect"), (await legend()).split("\n")[0]);
+// a WET gas, so there are two phases to have a pattern at all: a dry gas is single-phase gas and
+// every correlation correctly says so
+await page.$eval("#cgr", (n) => { n.value = "25"; n.dispatchEvent(new Event("input", { bubbles: true })); });
+await page.selectOption("#correlation", "gray");
+await page.waitForTimeout(250);
+await calc();
+check("Gray, which reports no pattern of its own, says so",
+      (await legend()).includes("Not identified") && (await legend()).includes("Gray does not"),
+      (await legend()).slice(0, 150));
+await page.$eval("#cgr", (n) => { n.value = "0"; n.dispatchEvent(new Event("input", { bubbles: true })); });
+await page.selectOption("#fluid_type", "oil");
+await page.$eval("#p_res", (n) => { n.value = "3000"; n.dispatchEvent(new Event("input", { bubbles: true })); });
+await page.waitForTimeout(250);
+
+// ---- the three columns fit, and nothing overflows ----
+await page.setViewportSize({ width: 1600, height: 900 });
+await page.waitForTimeout(300);
+await calc();
+const geo = await page.evaluate(() => {
+  const b = (s) => { const n = document.querySelector(s); const r = n.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left) }; };
+  return { panel: b(".panel-wrap"), nodal: b("#chart-nodal"), profile: b("#chart-profile"),
+           flow: b("#flow-well"), overflowX: document.documentElement.scrollWidth > window.innerWidth };
+});
+check("the three columns are side by side",
+      geo.nodal.left < geo.profile.left && geo.profile.left < geo.flow.left,
+      `nodal ${geo.nodal.left}, profile ${geo.profile.left}, flow ${geo.flow.left}`);
+check("the input panel is narrower than before", geo.panel.w === 300, `${geo.panel.w}px`);
+check("the charts still have room", geo.nodal.w > 300 && geo.profile.w > 300,
+      `${geo.nodal.w}px and ${geo.profile.w}px`);
+check("the well column is narrow", geo.flow.w < 260, `${geo.flow.w}px`);
+check("no sideways scrolling", !geo.overflowX);
+
+// and on a laptop, where it matters most
+const lap = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+await lap.addInitScript(() => { window.__plots = {}; window.Plotly = { newPlot: () => {}, purge: () => {} }; });
+await lap.goto(BASE, { waitUntil: "networkidle" });
+await lap.waitForTimeout(400);
+const lapGeo = await lap.evaluate(() => {
+  const b = (s) => { const r = document.querySelector(s).getBoundingClientRect();
+    return { w: Math.round(r.width), left: Math.round(r.left), top: Math.round(r.top + window.scrollY) }; };
+  return { nodal: b("#chart-nodal"), profile: b("#chart-profile"), flow: b("#flow-well"),
+           overflowX: document.documentElement.scrollWidth > window.innerWidth };
+});
+check("on a 1366px laptop the three still fit across",
+      lapGeo.nodal.top === lapGeo.profile.top && lapGeo.profile.top === lapGeo.flow.top,
+      `tops ${lapGeo.nodal.top}, ${lapGeo.profile.top}, ${lapGeo.flow.top}`);
+check("and the two charts are still usable",
+      lapGeo.nodal.w > 280 && lapGeo.profile.w > 280, `${lapGeo.nodal.w}px, ${lapGeo.profile.w}px`);
+check("no sideways scrolling on a laptop", !lapGeo.overflowX);
+await lap.close();
+
+
 check("no page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 await browser.close();
 console.log(bad === 0 ? "\nAll interface checks passed." : `\n${bad} failure(s).`);

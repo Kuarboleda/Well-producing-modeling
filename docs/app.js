@@ -477,25 +477,37 @@ function updateCorrelationAdvice() {
   const judged = advice.correlation_advice(inputs)[key];
   if (!judged) return;              // not a correlation for this fluid: the box is about to be refilled
   const rating = judged.rating;
+
+  // The short line is always on screen: the correlation's name and the verdict in three words.  The
+  // reasons are a paragraph, and a paragraph under every input makes the panel unreadable, so they
+  // wait behind the (i) button.
   const why = document.getElementById("corr-why");
-  if (why) {
-    why.className = `advice ${rating}`;
-    // the heading is the correlation's own name, then why it may or may not suit this well
-    const text = advice.correlation_caption(inputs, key);
-    const name = advice.nameOf(key);
-    why.innerHTML = `<b>${name}</b>${escapeHtml(text.slice(name.length))}`;
+  const short = document.getElementById("corr-short");
+  if (why) why.className = `advice ${rating}`;
+  if (short) {
+    const verdict = { good: "looks well suited to this well",
+                      ok: "should be usable for this well",
+                      caution: "may not suit this well" }[rating];
+    short.innerHTML = `<b>${escapeHtml(advice.nameOf(key))}</b> &mdash; ${verdict}`;
   }
-  const follow = /** @type {HTMLButtonElement} */ (el("btn-follow"));
-  const show = correlationPickedByHand && key !== suggested;
-  follow.classList.toggle("hidden", !show);
-  follow.textContent = show
-    ? `Use the app's suggestion (${advice.nameOf(suggested)})`
-    : "";
+
+  // behind the button: the reasons, the paragraph about the correlation, and the way back to the
+  // app's own suggestion
+  const reasons = document.getElementById("corr-reasons");
+  if (reasons) {
+    const caption = advice.correlation_caption(inputs, key);
+    const name = advice.nameOf(key);
+    // the first sentence is the verdict, which the short line already says
+    const rest = caption.slice(name.length).replace(/^[^.]*\.\s*/, "");
+    reasons.textContent = rest;
+  }
   const detail = document.getElementById("corr-detail");
-  const detailBox = document.getElementById("corr-detail-box");
-  const text = advice.correlation_detail(key, pick("fluid_type") === "oil");
-  if (detail) detail.textContent = text;
-  if (detailBox) detailBox.classList.toggle("hidden", !text);
+  if (detail) detail.textContent = advice.correlation_detail(key, pick("fluid_type") === "oil");
+
+  const follow = /** @type {HTMLButtonElement} */ (el("btn-follow"));
+  const offer = correlationPickedByHand && key !== suggested;
+  follow.classList.toggle("hidden", !offer);
+  follow.textContent = offer ? `Use the app's suggestion (${advice.nameOf(suggested)})` : "";
 }
 
 /** Text going into innerHTML. @param {string} text */
@@ -610,6 +622,7 @@ function recalculate() {
     drawResults([]);
     clearChart("chart-nodal");
     clearChart("chart-profile");
+    clearFlowPattern();
     drawTable([], [], "", "");
     message("messages", /** @type {Error} */ (error).message, "error");
     return;
@@ -649,6 +662,7 @@ function recalculate() {
              range: [0, Math.max(...pwfShown) * 1.02] },
   });
   clearChart("chart-profile");
+  clearFlowPattern();
   const note = document.getElementById("profile-note");
   if (note) note.textContent = "";
   const warnings = ipr.takeWarnings();
@@ -736,6 +750,7 @@ function runNodal() {
   const note = document.getElementById("profile-note");
   if (!res.found) {
     clearChart("chart-profile");
+    clearFlowPattern();
     if (note) note.textContent = "";
     message("messages", res.message, "warn");
     return;
@@ -747,6 +762,7 @@ function runNodal() {
   const tr = vlp.pressure_traverse(c.well, fluidAt, /** @type {number} */ (res.q), c.p_wh,
                                    c.correlation, c.max_step_ft, c.gravity_mult, c.friction_mult);
   drawProfile(tr, c);
+  drawFlowPattern(tr, c);
 
   const lengthLabel = units.unitOf("length");
   const tempLabel = units.unitOf("temperature");
@@ -829,7 +845,9 @@ function drawProfile(tr, c) {
   const traces = [
     { x: tr.T.map((/** @type {number} */ t) => units.fromEngine("temperature", t)), y: tvd,
       mode: "lines", name: `Temperature (${tempLabel})`,
-      line: { color: TEMP_COLOUR, width: 2, dash: "dot" },
+      // solid, not dashed: the axis titles below are written in each line's own colour, which says
+      // which line belongs to which axis better than a dash does
+      line: { color: TEMP_COLOUR, width: 2.5 },
       hovertemplate: `%{x:,.0f} ${tempLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
     { x: pressure, y: tvd, xaxis: "x2",
       mode: "lines", name: `Pressure (${pressureLabel})`,
@@ -847,11 +865,211 @@ function drawProfile(tr, c) {
     ...layoutFor(`Temperature (${tempLabel})`, `True vertical depth (${lengthLabel})`),
     yaxis: { title: { text: `True vertical depth (${lengthLabel})` }, autorange: "reversed",
              gridcolor: "#eef2f5", zeroline: false },
-    xaxis: { title: { text: `Temperature (${tempLabel})` }, gridcolor: "#eef2f5", zeroline: false },
-    xaxis2: { title: { text: `Pressure (${pressureLabel})` }, overlaying: "x", side: "top",
+    xaxis: { title: { text: `Temperature (${tempLabel})`, font: { color: TEMP_COLOUR } },
+             tickfont: { color: TEMP_COLOUR }, gridcolor: "#eef2f5", zeroline: false },
+    xaxis2: { title: { text: `Pressure (${pressureLabel})`, font: { color: IPR_COLOUR } },
+              tickfont: { color: IPR_COLOUR }, overlaying: "x", side: "top",
               gridcolor: "transparent", zeroline: false, rangemode: "tozero" },
     margin: { l: 70, r: 16, t: 42, b: 48 },
   });
+}
+
+// ---------------------------------------------------------------------
+// The flow pattern down the tubing
+// ---------------------------------------------------------------------
+// The correlation reports a flow pattern for every step of the traverse, and it is the most useful
+// thing it says that a chart of pressure cannot show: whether the well is bubbling, slugging or
+// flowing as a mist, and at what depth it changes.  The drawing is the tubing from wellhead to
+// perforations with each step coloured by its pattern, and bubbles or a film drawn inside it, so the
+// picture says what the pattern IS rather than only naming it.
+//
+// The names differ between correlations - Beggs and Brill has "distributed", "intermittent" and
+// "segregated"; Ansari has "bubble", "slug" and "annular"; Duns and Ros has regions - so every name
+// is mapped to one of five families below, and the legend shows only the ones this well actually has.
+
+/**
+ * Each flow pattern family: its colour, the name shown, and what it looks like.
+ * The order is the physical one, liquid-rich at the top of the list to gas-rich at the bottom.
+ * @type {Record<string, {colour: string, label: string, draw: string}>}
+ */
+const FLOW_FAMILIES = {
+  liquid: { colour: "#1f5c8b", label: "Liquid only", draw: "full" },
+  bubble: { colour: "#4e9ed4", label: "Bubble", draw: "bubbles" },
+  slug: { colour: "#8bc34a", label: "Slug / intermittent", draw: "slugs" },
+  churn: { colour: "#f5a623", label: "Churn / transition", draw: "churn" },
+  annular: { colour: "#d0686a", label: "Annular / mist", draw: "film" },
+  gas: { colour: "#b9b9b9", label: "Gas only", draw: "empty" },
+  // Some correlations never work out a flow pattern: Hagedorn and Brown has one holdup correlation
+  // for everything (with Griffith's bubble correction underneath it), Gray assumes the gas is
+  // continuous without saying which pattern that is, and Fancher and Brown ignores slip altogether.
+  // Those stretches are drawn blank and labelled as what they are.  Guessing a pattern for them
+  // would be the drawing claiming something the calculation never said.
+  none: { colour: "#ccd5dc", label: "Not identified by this correlation", draw: "" },
+};
+
+// The ones that do identify a pattern, named in the note under the legend so it is clear why some
+// correlations fill the drawing and others do not.
+const PATTERN_CORRELATIONS = ["beggs_brill", "orkiszewski", "duns_ros", "ansari", "mukherjee_brill"];
+
+/**
+ * Which family a correlation's own pattern name belongs to.  A name this does not know is drawn in
+ * grey and shown under its own name, so a new correlation cannot silently be mislabelled.
+ * @type {Record<string, string>}
+ */
+const FLOW_FAMILY_OF = {
+  // the single-phase ends, reported by every correlation
+  liquid: "liquid", gas: "gas",
+  // Ansari, Orkiszewski, Duns and Ros, Mukherjee and Brill
+  bubble: "bubble", dispersed: "bubble", "dispersed bubble": "bubble",
+  slug: "slug", plug: "slug", "slug/churn": "churn", churn: "churn",
+  transition: "churn", froth: "churn",
+  annular: "annular", mist: "annular", "annular/mist": "annular", "annular mist": "annular",
+  stratified: "slug",
+  // Beggs and Brill's four names
+  segregated: "annular", intermittent: "slug", distributed: "bubble",
+  // Hagedorn and Brown reports its own name when its own holdup is used, and Griffith's bubble
+  // correction when that takes over - that one IS bubble flow, which is what Griffith's correlation
+  // is for.  Gray and Fancher and Brown identify nothing.
+  hagedorn: "none", griffith: "bubble", gray: "none", "no-slip": "none",
+  // Duns and Ros numbers its regions
+  "region 1": "bubble", "region 2": "slug", "region 3": "annular",
+};
+
+/** The family of one reported pattern name. @param {string} name */
+function flowFamily(name) {
+  const key = String(name || "").toLowerCase().trim();
+  return FLOW_FAMILY_OF[key] || "";
+}
+
+/**
+ * Draw the tubing coloured by flow pattern.
+ * @param {any} tr the traverse, which carries regime[] and md[]
+ * @param {Case} c
+ */
+function drawFlowPattern(tr, c) {
+  const svg = document.getElementById("flow-svg");
+  const legend = document.getElementById("flow-legend");
+  if (!svg) return;
+
+  const W = 150;
+  const H = 420;
+  const top = 26;
+  const bottom = H - 18;
+  const x0 = 46;                      // the tubing, left edge
+  const x1 = 100;                     // and right edge
+  const perf_md = tr.md[tr.md.length - 1];
+  const y = (/** @type {number} */ md) => top + (bottom - top) * md / perf_md;
+
+  const lengthLabel = units.unitOf("length");
+  const shown = (/** @type {number} */ ft) => show(units.fromEngine("length", ft), 0);
+
+  /** @type {string[]} */
+  const parts = [];
+  /** @type {Set<string>} */
+  const used = new Set();
+  /** @type {Record<string, string>} */
+  const unknown = {};
+
+  // one block per step, and the pattern drawn inside it
+  for (let i = 0; i < tr.regime.length; i++) {
+    const name = tr.regime[i];
+    const family = flowFamily(name);
+    if (family) used.add(family);
+    else unknown[name] = name;
+    const colour = family ? FLOW_FAMILIES[family].colour : "#9e9e9e";
+    const yTop = y(tr.md[i]);
+    const yBot = y(tr.md[i + 1]);
+    const h = Math.max(yBot - yTop, 0.4);
+    parts.push(`<rect x="${x0}" y="${yTop.toFixed(2)}" width="${x1 - x0}" height="${h.toFixed(2)}" `
+      + `fill="${colour}" fill-opacity="0.9"><title>${escapeHtml(String(name))} at `
+      + `${shown(tr.md[i])}-${shown(tr.md[i + 1])} ${lengthLabel} MD</title></rect>`);
+  }
+
+  // the texture: bubbles, slugs or a film, drawn over the colour every 14 pixels so the picture shows
+  // what the pattern is and not only that it changed
+  for (let yy = top + 7; yy < bottom; yy += 14) {
+    const mdHere = perf_md * (yy - top) / (bottom - top);
+    let i = 0;
+    while (i < tr.regime.length - 1 && tr.md[i + 1] < mdHere) i += 1;
+    const family = flowFamily(tr.regime[i]);
+    const draw = family ? FLOW_FAMILIES[family].draw : "";
+    const mid = (x0 + x1) / 2;
+    if (draw === "bubbles") {
+      for (const dx of [-16, -6, 5, 15]) {
+        parts.push(`<circle cx="${mid + dx}" cy="${yy + (dx % 7)}" r="2.1" fill="#fff" fill-opacity="0.75"/>`);
+      }
+    } else if (draw === "slugs") {
+      // a long gas bubble with liquid either side of it
+      parts.push(`<ellipse cx="${mid}" cy="${yy}" rx="15" ry="4.6" fill="#fff" fill-opacity="0.8"/>`);
+    } else if (draw === "churn") {
+      parts.push(`<path d="M${x0 + 5},${yy} q 10,-5 20,0 t 20,0" stroke="#fff" stroke-opacity="0.8" `
+        + `stroke-width="1.6" fill="none"/>`);
+    } else if (draw === "film") {
+      // liquid on the wall, gas with droplets up the middle
+      parts.push(`<rect x="${x0}" y="${yy - 7}" width="4" height="14" fill="#fff" fill-opacity="0.65"/>`);
+      parts.push(`<rect x="${x1 - 4}" y="${yy - 7}" width="4" height="14" fill="#fff" fill-opacity="0.65"/>`);
+      parts.push(`<circle cx="${mid - 5}" cy="${yy}" r="1.3" fill="#fff" fill-opacity="0.85"/>`);
+      parts.push(`<circle cx="${mid + 6}" cy="${yy + 4}" r="1.1" fill="#fff" fill-opacity="0.85"/>`);
+    } else if (draw === "full") {
+      parts.push(`<line x1="${x0 + 6}" y1="${yy}" x2="${x1 - 6}" y2="${yy}" stroke="#fff" `
+        + `stroke-opacity="0.35" stroke-width="1"/>`);
+    }
+  }
+
+  // the tubing wall, the wellhead and the perforations
+  parts.push(`<rect x="${x0}" y="${top}" width="${x1 - x0}" height="${bottom - top}" `
+    + `fill="none" stroke="#5a6b7c" stroke-width="1.2"/>`);
+  parts.push(`<line x1="20" y1="${top}" x2="${W - 10}" y2="${top}" stroke="#d9e1e8" stroke-width="1"/>`);
+  parts.push(`<text x="20" y="${top - 8}" font-size="9" fill="#5a6b7c">wellhead</text>`);
+  parts.push(`<line x1="${x0 - 6}" y1="${bottom}" x2="${x1 + 6}" y2="${bottom}" stroke="#d1242f" stroke-width="2"/>`);
+  parts.push(`<text x="20" y="${bottom + 13}" font-size="9" fill="#5a6b7c">perforations</text>`);
+
+  // a depth scale down the left, at the depths where the pattern changes plus the two ends
+  /** @type {number[]} */
+  const marks = [0];
+  for (let i = 1; i < tr.regime.length; i++) {
+    if (flowFamily(tr.regime[i]) !== flowFamily(tr.regime[i - 1])) marks.push(tr.md[i]);
+  }
+  marks.push(perf_md);
+  let lastY = -99;
+  for (const md of marks) {
+    const yy = y(md);
+    if (yy - lastY < 13) continue;              // no overlapping labels
+    lastY = yy;
+    parts.push(`<line x1="${x0 - 4}" y1="${yy.toFixed(1)}" x2="${x0}" y2="${yy.toFixed(1)}" `
+      + `stroke="#5a6b7c" stroke-width="0.8"/>`);
+    parts.push(`<text x="${x0 - 6}" y="${(yy + 3).toFixed(1)}" font-size="8.5" fill="#5a6b7c" `
+      + `text-anchor="end">${shown(md)}</text>`);
+  }
+  parts.push(`<text x="4" y="${top - 8}" font-size="8.5" fill="#5a6b7c">MD, ${lengthLabel}</text>`);
+
+  svg.innerHTML = parts.join("");
+
+  // the legend: only the patterns this well has, in the physical order, plus any name not recognised
+  if (legend) {
+    const rows = Object.keys(FLOW_FAMILIES)
+      .filter((f) => used.has(f))
+      .map((f) => `<span><i style="background:${FLOW_FAMILIES[f].colour}"></i>${FLOW_FAMILIES[f].label}</span>`);
+    for (const name of Object.keys(unknown)) {
+      rows.push(`<span><i style="background:#9e9e9e"></i>${escapeHtml(name)}</span>`);
+    }
+    let html = rows.join("");
+    if (used.has("none")) {
+      html += `<span class="flow-note">Only some correlations work out a flow pattern: `
+        + `${PATTERN_CORRELATIONS.map((k) => advice.nameOf(k)).join(", ")}. `
+        + `${advice.nameOf(c.correlation)} does not, so the shaded part is left blank rather than `
+        + `guessed.</span>`;
+    }
+    legend.innerHTML = html;
+  }
+}
+
+/** Empty the flow drawing. */
+function clearFlowPattern() {
+  const svg = document.getElementById("flow-svg");
+  const legend = document.getElementById("flow-legend");
+  if (svg) svg.innerHTML = "";
+  if (legend) legend.innerHTML = "";
 }
 
 // ---------------------------------------------------------------------
@@ -1665,6 +1883,11 @@ el("panel").addEventListener("keydown", (event) => {
   calculate();
 });
 el("btn-reset").addEventListener("click", resetInputs);
+el("btn-why").addEventListener("click", () => {
+  const box = el("corr-long");
+  const open = box.classList.toggle("hidden");
+  el("btn-why").setAttribute("aria-expanded", String(!open));
+});
 el("btn-sens").addEventListener("click", runSensitivity);
 el("btn-compare").addEventListener("click", compareToSurvey);
 el("btn-match").addEventListener("click", runMatch);

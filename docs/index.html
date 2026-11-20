@@ -48,7 +48,7 @@
 
   .layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
   .panel-wrap {
-    flex: 0 0 350px;
+    flex: 0 0 300px;
     border-right: 1px solid var(--line);
     background: var(--panel);
     align-self: stretch;
@@ -123,10 +123,28 @@
   #sketch .inj { stroke: #1d8a7e; stroke-width: 2; stroke-dasharray: 4 3; }
   #sketch .ground { stroke: var(--line); stroke-width: 1; }
   #sketch-note { margin: 4px 0 0; }
+  /* The short line is always there; the reasons sit behind the (i) button, because a paragraph of
+     text under every input makes the panel unreadable. */
   .advice {
     font-size: 12px; line-height: 1.45; margin: 6px 0 8px; padding: 8px 10px;
     border-left: 3px solid var(--ink-soft); background: #fff; border-radius: 3px;
+    display: flex; align-items: baseline; gap: 7px;
   }
+  .advice .info {
+    flex: 0 0 auto; width: 17px; height: 17px; padding: 0; margin: 0;
+    border-radius: 50%; border: 1px solid var(--ink-soft); background: #fff;
+    font: italic 600 11px/15px Georgia, serif; color: var(--ink-soft); text-align: center;
+  }
+  .advice .info:hover, .advice .info[aria-expanded="true"] {
+    border-color: var(--accent); color: var(--accent);
+  }
+  .advice-long {
+    font-size: 12px; line-height: 1.5; color: var(--ink-soft);
+    margin: -4px 0 10px; padding: 0 10px 2px 20px;
+  }
+  .advice-long p { margin: 0 0 7px; }
+  .advice-long p:empty { display: none; }
+  .follow { font-size: 12px; padding: 5px 9px; margin-bottom: 4px; }
   .advice.good { border-left-color: #1a7f37; }
   .advice.ok { border-left-color: var(--accent); }
   .advice.caution { border-left-color: var(--warn-line); background: var(--warn-bg); }
@@ -157,7 +175,20 @@
 
   .charts { display: flex; flex-wrap: wrap; gap: 16px; }
   .charts > div { flex: 1 1 380px; min-width: 0; }
+  /* three across: the two charts share the room and the well drawing takes a narrow column, because
+     it is tall and thin by nature */
+  .charts.three > div { flex: 1 1 300px; }
+  .charts.three > .flowcol { flex: 0 1 190px; }
   .chart { width: 100%; height: 440px; }
+  .flowcol .chart { display: flex; justify-content: center; }
+  #flow-svg { height: 100%; max-width: 100%; }
+  .flow-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px;
+                 color: var(--ink-soft); margin-top: 8px; }
+  .flow-legend span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .flow-legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block;
+                   border: 1px solid rgba(0, 0, 0, 0.12); }
+  .flow-legend .flow-note { display: block; flex: 1 1 100%; white-space: normal; line-height: 1.45;
+                            margin-top: 2px; }
   h2.sub { font-size: 13px; font-weight: 650; margin: 0 0 6px; }
 
   .note {
@@ -194,7 +225,7 @@
     .actionbar { position: fixed; left: 0; right: 0; bottom: 0; margin: 0;
                  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08); }
     body { padding-bottom: 64px; }
-    .charts > div { flex: 1 1 100%; }
+    .charts > div, .charts.three > div, .charts.three > .flowcol { flex: 1 1 100%; }
   }
 </style>
 </head>
@@ -203,7 +234,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 20 Nov 2026 12:27 (ed863b5)</span>
+  <span class="sub build" id="build">build 20 Nov 2026 16:24 (89c96b3)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -231,7 +262,7 @@
           </select>
         </label>
         <div class="row">
-          <label>Static reservoir pressure <span class="u" data-unit="pressure"></span>
+          <label>Reservoir pressure <span class="u" data-unit="pressure"></span>
             <input type="number" id="p_res" value="3000" step="50" min="1">
           </label>
           <label>Temperature <span class="u" data-unit="temperature"></span>
@@ -573,12 +604,17 @@
       <label>
         <select id="correlation"></select>
       </label>
-      <p class="advice" id="corr-why"></p>
-      <button type="button" id="btn-follow" class="hidden"></button>
-      <details class="more" id="corr-detail-box">
-        <summary>More about this correlation</summary>
+      <p class="advice" id="corr-why">
+        <button type="button" class="info" id="btn-why" aria-expanded="false"
+                title="Why this correlation, and when not to use it">i</button>
+        <span id="corr-short"></span>
+      </p>
+      <div id="corr-long" class="advice-long hidden">
+        <p id="corr-reasons"></p>
         <p id="corr-detail"></p>
-      </details>
+      </div>
+      <!-- an action, not an explanation, so it stays in sight rather than hiding behind the (i) -->
+      <button type="button" id="btn-follow" class="hidden follow"></button>
     </fieldset>
 
   </form>
@@ -627,7 +663,7 @@
     <section class="tabpage on" id="page-nodal">
       <ul class="results" id="results"></ul>
       <div id="messages"></div>
-      <div class="charts">
+      <div class="charts three">
         <div>
           <h2 class="sub">IPR / VLP</h2>
           <div class="chart" id="chart-nodal"></div>
@@ -635,6 +671,14 @@
         <div>
           <h2 class="sub">Pressure and temperature profile</h2>
           <div class="chart" id="chart-profile"></div>
+        </div>
+        <div class="flowcol">
+          <h2 class="sub">Flow pattern in the tubing</h2>
+          <div class="chart" id="flow-well">
+            <svg id="flow-svg" viewBox="0 0 150 420" preserveAspectRatio="xMidYMid meet" role="img"
+                 aria-label="The tubing from wellhead to perforations, coloured by flow pattern"></svg>
+          </div>
+          <div id="flow-legend" class="flow-legend"></div>
         </div>
       </div>
       <p class="caption" id="profile-note"></p>
@@ -802,6 +846,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=ed863b5"></script>
+<script type="module" src="app.js?v=89c96b3"></script>
 </body>
 </html>

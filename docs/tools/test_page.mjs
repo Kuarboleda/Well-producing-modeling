@@ -186,7 +186,10 @@ check("a higher wellhead pressure gives a lower rate",
       flowed.every((v, i) => i === 0 || v < flowed[i - 1]), sensRates.join(" | "));
 
 // ---- 7a. the correlation is chosen for the well, with a reason ----
-const whyText = () => page.$eval("#corr-why", (n) => n.innerText);
+// the short line, plus whatever the (i) reveals: the reasons are checked wherever they live
+const whyText = async () => (await page.$eval("#corr-short", (n) => n.innerText))
+  + " " + (await page.$eval("#corr-reasons", (n) => n.innerText))
+  + " " + (await page.$eval("#corr-detail", (n) => n.innerText));
 const whyClass = () => page.$eval("#corr-why", (n) => n.className);
 // section 3 chose a correlation by hand, which stops the app moving the box; put it back on auto
 if (!(await page.$eval("#btn-follow", (n) => n.classList.contains("hidden")))) {
@@ -200,6 +203,9 @@ check("Gray is not offered for an oil well", !offered.includes("gray"), offered.
 check("the seven that apply are offered", offered.length === 7, offered.join(","));
 check("the advice names the correlation first",
       (await whyText()).startsWith("Hagedorn and Brown"), (await whyText()).slice(0, 60));
+check("the line on screen is one short line, not a paragraph",
+      (await page.$eval("#corr-short", (n) => n.innerText)).length < 70,
+      await page.$eval("#corr-short", (n) => n.innerText));
 check("the advice says it suits this well", (await whyText()).includes("looks well suited"));
 check("the advice always points at measured data",
       (await whyText()).includes("downhole pressure gauge") && (await whyText()).includes("gradient survey"));
@@ -226,6 +232,9 @@ check("a doubtful correlation is marked caution", (await whyClass()).includes("c
 check("it still offers the app's own suggestion",
       (await page.$eval("#btn-follow", (n) => n.innerText)).includes("Hagedorn and Brown"),
       await page.$eval("#btn-follow", (n) => n.innerText));
+// the way back must be in sight, not folded behind the (i): it is an action, not an explanation
+check("the way back is visible without opening anything",
+      await page.$eval("#btn-follow", (n) => n.getBoundingClientRect().height > 0));
 await page.click("#btn-follow");
 await page.waitForTimeout(250);
 check("the button puts the suggestion back", (await val("correlation")) === "hagedorn_brown");

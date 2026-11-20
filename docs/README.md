@@ -42,6 +42,13 @@ measurable rather than a matter of taste, so it was measured:
 * The Equipment section draws **the well**: its path, the tubing, the perforations and the gas lift
   injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
   the perforations is obvious in a picture and invisible in a column of numbers.
+* Beside the pressure and temperature profile, a second drawing shows **the flow pattern in the
+  tubing**: the pipe from wellhead to perforations, coloured by the pattern the correlation reports
+  at each step, with bubbles, slugs or a wall film drawn inside it and the depths where the pattern
+  changes marked. Only five of the eight correlations work out a pattern at all; for the other three
+  the drawing is left blank and says so rather than guessing one.
+* The note under the correlation box is **one line** - the name and the verdict - with the reasons
+  behind an (i) button, because a paragraph under every input makes the panel unread.
 * The well is **remembered in this browser** (and only there - nothing is sent anywhere), so a
   refresh does not throw it away. **Reset** puts the starting values back. A first-time visitor sees
   the starting well, not someone else's.
@@ -76,7 +83,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
 | `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
-| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the well drawing, the out-of-date marker, Enter, the remembered well, the phone layout (29 checks) |
+| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the two well drawings, the flow patterns of every correlation, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout (71 checks) |
 | `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
