@@ -610,6 +610,8 @@ export function ork_gamma(mu_l, d_ft, v_t, water_continuous) {
 
 /**
  * Bubble flow: [average density, friction gradient in lbf/ft2/ft, extra results].
+ * @param {number} v_sl @param {number} v_sg @param {number} v_t @param {number} rho_l
+ * @param {number} rho_g @param {number} mu_l @param {number} d_ft @param {number} eps_d
  * @returns {[number, number, {f: number, re: number}]}
  */
 function orkBubble(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d) {
@@ -625,6 +627,9 @@ function orkBubble(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d) {
 
 /**
  * Slug flow: [average density, friction gradient in lbf/ft2/ft, extra results].
+ * @param {number} v_sl @param {number} v_sg @param {number} v_t @param {number} rho_l
+ * @param {number} rho_g @param {number} mu_l @param {number} d_ft @param {number} eps_d
+ * @param {boolean} water_continuous
  * @returns {[number, number, {f: number, re: number, v_b: number, gamma: number}]}
  */
 function orkSlug(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d, water_continuous) {
@@ -648,6 +653,9 @@ function orkSlug(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d, water_continu
  * Mist flow (no slip) with gas superficial velocity v_g: [density, friction gradient, extras].
  * The wall roughness seen by the gas is the Duns-Ros one (Eq. C-21, C-22), kept between 0.001 and
  * 0.5 (a gas-only well uses the pipe's own roughness instead).
+ * @param {number} v_sl @param {number} v_g @param {number} rho_l @param {number} rho_g
+ * @param {number} mu_l @param {number} mu_g @param {number} sigma_lbm @param {number} d_ft
+ * @param {number} eps_d @param {boolean} [duns_ros_roughness]
  * @returns {[number, number, {f: number, re: number}]}
  */
 function orkMist(v_sl, v_g, rho_l, rho_g, mu_l, mu_g, sigma_lbm, d_ft, eps_d, duns_ros_roughness = true) {
@@ -929,6 +937,9 @@ export function dr_mist_film_roughness(v_sg, rho_g, rho_l, mu_l, sigma_dyne, d_f
 /**
  * Holdup, static gradient and friction gradient of one region, both as fractions of the liquid
  * static gradient (G_st, G_fr).  region = 1, 2 or 3.
+ * @param {number} region @param {number} v_sl @param {number} v_sg @param {number} rho_l
+ * @param {number} rho_g @param {number} mu_l @param {number} mu_g @param {number} sigma
+ * @param {number} d_ft @param {number} pipe_eps_d
  * @returns {[number, number, number, number, number]} [holdup, G_st, G_fr, f used, Reynolds number]
  */
 function drGradientParts(region, v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, pipe_eps_d) {
