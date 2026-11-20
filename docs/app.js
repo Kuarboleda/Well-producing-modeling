@@ -762,7 +762,22 @@ function runNodal() {
   const tr = vlp.pressure_traverse(c.well, fluidAt, /** @type {number} */ (res.q), c.p_wh,
                                    c.correlation, c.max_step_ft, c.gravity_mult, c.friction_mult);
   drawProfile(tr, c);
-  drawFlowPattern(tr, c);
+
+  // the pattern drawing: the chosen correlation's own pattern when it has one, otherwise the best
+  // suited of the five that do, run on the same well at the same rate
+  const patternFrom = patternCorrelationFor(adviceInputs(), c.correlation);
+  const borrowed = patternFrom !== c.correlation;
+  let patternTr = tr;
+  if (borrowed) {
+    try {
+      patternTr = vlp.pressure_traverse(c.well, fluidAt, /** @type {number} */ (res.q), c.p_wh,
+                                        patternFrom, c.max_step_ft, c.gravity_mult, c.friction_mult);
+    } catch {
+      patternTr = tr;                 // it would not run: fall back to the blank drawing
+      drawFlowPattern(tr, c, c.correlation, false);
+    }
+  }
+  if (patternTr !== tr || !borrowed) drawFlowPattern(patternTr, c, patternFrom, borrowed);
 
   const lengthLabel = units.unitOf("length");
   const tempLabel = units.unitOf("temperature");
@@ -935,6 +950,39 @@ const FLOW_FAMILY_OF = {
   "region 1": "bubble", "region 2": "slug", "region 3": "annular",
 };
 
+/**
+ * Which correlation the flow-pattern drawing should come from.
+ *
+ * Three of the eight work out no pattern at all, and one of them - Hagedorn and Brown - is what the
+ * app suggests for a great many wells, so the drawing would usually be blank.  Instead, when the
+ * chosen correlation identifies nothing, the pattern is borrowed from the best-suited correlation
+ * that DOES identify one, judged for this same well by the same rules that pick the correlation in
+ * the first place.
+ *
+ * Only the pattern is borrowed.  Every pressure on the page still comes from the correlation the
+ * user chose, and the caption under the drawing says which correlation the pattern came from, so the
+ * two are never confused.
+ * @param {import("./advice.js").AdviceInputs} inputs @param {string} chosen
+ */
+function patternCorrelationFor(inputs, chosen) {
+  if (PATTERN_CORRELATIONS.includes(chosen)) return chosen;
+  const rated = advice.correlation_advice(inputs);
+  const order = inputs.fluid_type === "oil" ? advice.PREFERENCE_OIL : advice.PREFERENCE_GAS;
+  /** @type {Record<string, number>} */
+  const rank = { good: 0, ok: 1, caution: 2 };
+  let best = "";
+  let bestRank = [9, 9];
+  order.forEach((key, index) => {
+    if (!PATTERN_CORRELATIONS.includes(key)) return;
+    const here = [rank[rated[key]?.rating] ?? 9, index];
+    if (here[0] < bestRank[0] || (here[0] === bestRank[0] && here[1] < bestRank[1])) {
+      best = key;
+      bestRank = here;
+    }
+  });
+  return best || "beggs_brill";
+}
+
 /** The family of one reported pattern name. @param {string} name */
 function flowFamily(name) {
   const key = String(name || "").toLowerCase().trim();
@@ -943,10 +991,12 @@ function flowFamily(name) {
 
 /**
  * Draw the tubing coloured by flow pattern.
- * @param {any} tr the traverse, which carries regime[] and md[]
+ * @param {any} tr the traverse whose regime[] and md[] are drawn
  * @param {Case} c
+ * @param {string} from the correlation this pattern came from
+ * @param {boolean} borrowed whether that is a different correlation from the one being used
  */
-function drawFlowPattern(tr, c) {
+function drawFlowPattern(tr, c, from, borrowed) {
   const svg = document.getElementById("flow-svg");
   const legend = document.getElementById("flow-legend");
   if (!svg) return;
@@ -1054,10 +1104,15 @@ function drawFlowPattern(tr, c) {
       rows.push(`<span><i style="background:#9e9e9e"></i>${escapeHtml(name)}</span>`);
     }
     let html = rows.join("");
-    if (used.has("none")) {
-      html += `<span class="flow-note">Only some correlations work out a flow pattern: `
-        + `${PATTERN_CORRELATIONS.map((k) => advice.nameOf(k)).join(", ")}. `
-        + `${advice.nameOf(c.correlation)} does not, so the shaded part is left blank rather than `
+    if (borrowed) {
+      html += `<span class="flow-note">${advice.nameOf(c.correlation)}, which is the correlation in `
+        + `use, works out no flow pattern. This pattern is from <b>${advice.nameOf(from)}</b>, the `
+        + `best suited of the five that do (${PATTERN_CORRELATIONS.map((k) => advice.nameOf(k)).join(", ")}), `
+        + `run on the same well at the same rate. Every pressure on this page is still `
+        + `${advice.nameOf(c.correlation)}'s.</span>`;
+    } else if (used.has("none")) {
+      html += `<span class="flow-note">${advice.nameOf(from)} works out no flow pattern here, and `
+        + `no other correlation could be run for one, so this part is left blank rather than `
         + `guessed.</span>`;
     }
     legend.innerHTML = html;

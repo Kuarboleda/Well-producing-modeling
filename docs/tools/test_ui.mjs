@@ -226,18 +226,44 @@ const blocks = await page.$$eval("#flow-svg rect", (ns) => ns.length);
 check("one block per step of the traverse, plus the wall", blocks > 50, `${blocks} rectangles`);
 check("every block says its pattern and depth on hover",
       (await flowSvg()).includes("<title>") && (await flowSvg()).includes("ft MD"));
-check("the legend names the patterns found", (await legend()).length > 0, await legend());
-// Hagedorn and Brown works out no flow pattern, and the drawing must say so rather than invent one
-check("a correlation that identifies no pattern says so",
-      (await legend()).includes("Not identified by this correlation"), await legend());
-check("and the note names the ones that do",
-      (await legend()).includes("Only some correlations work out a flow pattern")
-        && (await legend()).includes("Ansari"), (await legend()).slice(-170));
+const await_legend = await legend();
+check("the legend names the patterns found", await_legend.length > 0, await_legend.split("\n")[0]);
+// the correlation in use here is Hagedorn and Brown, which works out no pattern, so the drawing
+// borrows one and names the five that do
+check("the note names the five that work out a pattern",
+      ["Beggs and Brill", "Orkiszewski", "Duns and Ros", "Ansari", "Mukherjee and Brill"]
+        .every((n) => (await_legend).includes(n)), (await_legend).slice(-170));
 check("Beggs and Brill's names are translated, not shown raw",
       !(await legend()).toLowerCase().includes("intermittent 8") , await legend());
 const depthMarks = await page.$$eval("#flow-svg text", (ns) => ns.map((n) => n.textContent));
 check("the depth scale is there", depthMarks.includes("0") && depthMarks.some((t) => t === "8,000"),
       depthMarks.join(" "));
+
+// ---- the pattern is borrowed when the chosen correlation works out none ----
+// Hagedorn and Brown is what the app suggests for this well and it identifies no pattern, so the
+// drawing must borrow one rather than stand empty - and must say whose it is.
+await page.click("#btn-follow").catch(() => {});
+await page.selectOption("#correlation", "hagedorn_brown");
+await page.waitForTimeout(250);
+await calc();
+const borrowedNote = await legend();
+check("a correlation with no pattern of its own borrows one",
+      !borrowedNote.includes("Not identified by this correlation"), borrowedNote.split("\n")[0]);
+check("and the drawing says whose pattern it is",
+      borrowedNote.includes("works out no flow pattern") && borrowedNote.includes("This pattern is from"),
+      borrowedNote.slice(-200));
+check("it is one of the five that do work one out",
+      PATTERN_ONES.some((k) => borrowedNote.includes({ beggs_brill: "Beggs and Brill",
+        orkiszewski: "Orkiszewski", duns_ros: "Duns and Ros", ansari: "Ansari",
+        mukherjee_brill: "Mukherjee and Brill" }[k])), borrowedNote.slice(-200));
+check("and it says the pressures are still the chosen correlation's",
+      borrowedNote.includes("Every pressure on this page is still Hagedorn and Brown"),
+      borrowedNote.slice(-120));
+check("the borrowed drawing is actually filled in",
+      (await flowSvg()).includes("<rect") && (await flowSvg()).includes("<title>"));
+// the profile on the same screen must still be Hagedorn and Brown's own pressures
+const hbProf = await page.evaluate(() => window.__plots["chart-profile"]);
+check("the profile is unchanged by the borrowing", hbProf.traces.length >= 2);
 
 // a correlation whose names are completely different must still be understood
 // Gray is not offered for an oil well, so it is checked under the gas well below
@@ -268,9 +294,12 @@ await page.$eval("#cgr", (n) => { n.value = "25"; n.dispatchEvent(new Event("inp
 await page.selectOption("#correlation", "gray");
 await page.waitForTimeout(250);
 await calc();
-check("Gray, which reports no pattern of its own, says so",
-      (await legend()).includes("Not identified") && (await legend()).includes("Gray does not"),
-      (await legend()).slice(0, 150));
+const grayNote = await legend();
+check("Gray, which works out no pattern of its own, borrows one and says so",
+      grayNote.includes("works out no flow pattern") && grayNote.includes("This pattern is from")
+        && !grayNote.includes("Not identified by this correlation"), grayNote.slice(-200));
+check("and says the pressures are still Gray's",
+      grayNote.includes("Every pressure on this page is still Gray"), grayNote.slice(-90));
 await page.$eval("#cgr", (n) => { n.value = "0"; n.dispatchEvent(new Event("input", { bubbles: true })); });
 await page.selectOption("#fluid_type", "oil");
 await page.$eval("#p_res", (n) => { n.value = "3000"; n.dispatchEvent(new Event("input", { bubbles: true })); });

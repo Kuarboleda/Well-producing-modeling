@@ -45,8 +45,15 @@ measurable rather than a matter of taste, so it was measured:
 * Beside the pressure and temperature profile, a second drawing shows **the flow pattern in the
   tubing**: the pipe from wellhead to perforations, coloured by the pattern the correlation reports
   at each step, with bubbles, slugs or a wall film drawn inside it and the depths where the pattern
-  changes marked. Only five of the eight correlations work out a pattern at all; for the other three
-  the drawing is left blank and says so rather than guessing one.
+  changes marked.
+
+  Only five of the eight work out a pattern at all: Hagedorn and Brown has one holdup correlation for
+  everything, Gray assumes the gas is continuous without naming a pattern, and Fancher and Brown
+  ignores slip. When one of those is in use, the drawing borrows the pattern from the best suited of
+  the five that do - judged for the same well by the same rules that pick the correlation - and says
+  underneath whose pattern it is and that every pressure on the page is still the chosen
+  correlation's. Mapping a correlation's own output to a plausible-looking pattern it never computed
+  would be the drawing claiming something the calculation never said.
 * The note under the correlation box is **one line** - the name and the verdict - with the reasons
   behind an (i) button, because a paragraph under every input makes the panel unread.
 * The well is **remembered in this browser** (and only there - nothing is sent anywhere), so a
