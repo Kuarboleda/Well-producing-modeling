@@ -49,9 +49,10 @@ const val = (id) => page.$eval(`#${id}`, (n) => n.value);
 const setVal = async (id, v) => {
   await page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event("input", { bubbles: true })); }, v);
 };
-// the telemetry beside the well, plus the inflow model's own numbers under the charts: between
-// them they are what the page reports, and a check should not care which list a number is in
-const results = () => page.$$eval("#results li, #extras li", (lis) => lis.map(
+// The rates across the top, the telemetry beside the well and the inflow model's own numbers under
+// the charts: between them they are what the page reports, and a check should not care which of
+// the three lists a number is in.
+const results = () => page.$$eval("#kpis li, #results li, #extras li", (lis) => lis.map(
   (li) => [li.querySelector(".k")?.textContent || "", li.querySelector(".v")?.textContent || ""]));
 const numberFrom = (pairs, key) => {
   const hit = pairs.find(([k]) => k.includes(key));
@@ -86,7 +87,7 @@ await page.waitForFunction(() => document.querySelector("#btn-calc").textContent
                            null, { timeout: 30000 });
 await page.waitForTimeout(400);
 const r = await results();
-const q = numberFrom(r, "Rate (");
+const q = numberFrom(r, "Liquid rate (");
 const pwf = numberFrom(r, "Pwf (");
 check("an operating rate appears", Number.isFinite(q) && q > 0, `${q} STB/d`);
 check("an operating Pwf appears", Number.isFinite(pwf) && pwf > 0, `${pwf} psig`);
@@ -100,7 +101,8 @@ check("IPR, VLP and the operating point are all drawn", (await traceCount("chart
 check("the profile chart is drawn", (await traceCount("chart-profile")) === 2);
 const prof = await plotOf("chart-profile");
 const lineFor = (what) => prof.traces.find((t) => t.name.includes(what));
-check("depth runs downwards", prof.layout.yaxis.autorange === "reversed");
+check("depth runs downwards", prof.layout.yaxis.range[0] > prof.layout.yaxis.range[1],
+      `${prof.layout.yaxis.range}`);
 check("the profile has a pressure line and a temperature line",
       Boolean(lineFor("Pressure")) && Boolean(lineFor("Temperature")));
 // temperature on the bottom axis, pressure on the top one
@@ -130,7 +132,7 @@ await page.selectOption("#correlation", "orkiszewski");
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
-const q2 = numberFrom(await results(), "Rate (");
+const q2 = numberFrom(await results(), "Liquid rate (");
 check("another correlation gives a different rate", Number.isFinite(q2) && Math.abs(q2 - q) > 1,
       `${q2} vs ${q} STB/d`);
 
@@ -141,7 +143,7 @@ check("the survey box appears", await page.$eval("#f-survey", (n) => !n.classLis
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
-const qDev = numberFrom(await results(), "Rate (");
+const qDev = numberFrom(await results(), "Liquid rate (");
 check("the deviated well solves", Number.isFinite(qDev) && qDev > 0, `${qDev} STB/d`);
 check("the deviated well flows more than the vertical one (7,000 ft TVD, not 8,000)", qDev > q,
       `${qDev} vs ${q}`);
@@ -155,7 +157,7 @@ await setVal("gl_rate", "1500");
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
-const qLift = numberFrom(await results(), "Rate (");
+const qLift = numberFrom(await results(), "Liquid rate (");
 check("the gas-lifted well solves", Number.isFinite(qLift) && qLift > 0, `${qLift} STB/d`);
 check("gas lift raises the rate", qLift > q, `${qLift} with lift vs ${q} without`);
 check("the injection depth is marked on the profile", (await traceCount("chart-profile")) === 3);
@@ -373,7 +375,8 @@ await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
 const gasRes = await results();
-check("the gas well solves", numberFrom(gasRes, "Rate (") > 0, `${numberFrom(gasRes, "Rate (")} Mscf/d`);
+check("the gas well solves", numberFrom(gasRes, "Gas rate (") > 0,
+      `${numberFrom(gasRes, "Gas rate (")} Mscf/d`);
 check("the rate is in Mscf/d", gasRes.some(([k]) => k.includes("Mscf/d")), gasRes.map(([k]) => k).join(" | "));
 check("Z is reported", Number.isFinite(numberFrom(gasRes, "Z at")), `${numberFrom(gasRes, "Z at")}`);
 
@@ -391,7 +394,7 @@ await page.waitForTimeout(150);
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
-const qField = numberFrom(await results(), "Rate (");
+const qField = numberFrom(await results(), "Liquid rate (");
 await page.selectOption("#unit_system", "metric");
 await page.waitForTimeout(200);
 check("3000 psig became 206.843 barg", near(Number(await val("p_res")), 3000 / 14.5037738, 1e-4),
@@ -401,7 +404,7 @@ check("8000 ft became 2438.4 m", near(Number(await val("depth")), 8000 * 0.3048,
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
-const qMetric = numberFrom(await results(), "Rate (");
+const qMetric = numberFrom(await results(), "Liquid rate (");
 check("the operating rate is the same well in m3/d", near(qMetric, qField / 6.2898106, 3e-3),
       `${qMetric} m3/d vs ${(qField / 6.2898106).toFixed(1)} expected`);
 check("the profile is drawn in metric", (await traceCount("chart-profile")) === 2);

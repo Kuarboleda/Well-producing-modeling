@@ -237,6 +237,23 @@ check("the bottom axis title is in the temperature colour",
       `${prof.layout.xaxis.title.font.color} vs ${tline.line.color}`);
 check("the top axis title is in the pressure colour",
       prof.layout.xaxis2.title.font.color === pline.line.color);
+// the axes are rounded out to whole ticks, so the first and last values are both labelled
+check("the pressure axis reaches past the deepest pressure",
+      prof.layout.xaxis2.range[1] >= Math.max(...pline.x)
+        && prof.layout.xaxis2.range[1] % prof.layout.xaxis2.dtick === 0,
+      `axis to ${prof.layout.xaxis2.range[1]}, data to ${Math.round(Math.max(...pline.x))}, `
+        + `step ${prof.layout.xaxis2.dtick}`);
+check("the temperature axis starts on a tick at or below the wellhead",
+      prof.layout.xaxis.range[0] <= Math.min(...tline.x)
+        && prof.layout.xaxis.range[0] % prof.layout.xaxis.dtick === 0,
+      `axis from ${prof.layout.xaxis.range[0]}, data from ${Math.round(Math.min(...tline.x))}`);
+check("the legend is out of the top axis",
+      prof.layout.legend.y < 0.5 && prof.layout.legend.yanchor === "bottom",
+      JSON.stringify(prof.layout.legend));
+// the rate axis starts just below zero so its "0" clears the pressure axis's own
+const nod = await page.evaluate(() => window.__plots["chart-nodal"]);
+check("the two zeros at the origin are separated", nod.layout.xaxis.range[0] < 0,
+      `rate axis starts at ${nod.layout.xaxis.range[0].toFixed(1)}`);
 
 // ---- the live well beside the charts ----
 check("the well is drawn", (await flowSvg()).includes("<path") && (await flowSvg()).includes("Perforations"));
@@ -301,14 +318,84 @@ const sides = await page.evaluate(() => {
 });
 check("the lift gas goes down the side it came in on", sides.line < sides.bore + 4,
       `port ${Math.round(sides.port)}, annulus line ${Math.round(sides.line)}, bore ${Math.round(sides.bore)}`);
+// Where the parts sit ACROSS the well, in drawing units measured from its centre line.  A stroked
+// path reports no width of its own, so the widths come from the stroke and the centre from the bore.
+const across = await page.evaluate(() => {
+  const svg = document.querySelector("#flow-svg");
+  const r = svg.getBoundingClientRect();
+  const k = svg.viewBox.baseVal.width / r.width;
+  const cx0 = (svg.querySelector("#wv-bore").getBoundingClientRect().left - r.left) * k;
+  const half = (sel) => Number(svg.querySelector(sel).getAttribute("stroke-width")) / 2;
+  const n = (el, a) => Number(el.getAttribute(a));
+  const band = (el) => {
+    const mid = Math.abs(n(el, "x") + n(el, "width") / 2 - cx0);
+    return [mid - n(el, "width") / 2, mid + n(el, "width") / 2];
+  };
+  const valve = svg.querySelector("#wv-glvalve");
+  const end = svg.querySelector("#wv-liftline").getAttribute("d").split("L").pop().split(",");
+  return {
+    bore: half("#wv-bore"), tubing: half("#wv-tubing"), casing: half("#wv-annulus"),
+    valve: band(valve),
+    packers: [...svg.querySelectorAll(".wv-packer")].map(band),
+    gap: Math.hypot(Number(end[0]) - (n(valve, "x") + n(valve, "width") / 2),
+                    Number(end[1]) - (n(valve, "y") + n(valve, "height") / 2)),
+    // every drop below the tree has to be inside the bore it is drawn in
+    worstDrop: Math.max(...[...svg.querySelectorAll("#wv-fluid circle")]
+      .filter((c) => n(c, "cy") > 150)
+      .map((c) => Math.abs(n(c, "cx") - cx0) + n(c, "r"))),
+  };
+});
+check("the gas lift valve is flush against the tubing wall",
+      Math.abs(across.valve[0] - across.tubing) < 0.6,
+      `valve from ${across.valve[0].toFixed(1)}, tubing wall at ${across.tubing.toFixed(1)}`);
+check("and it still fits inside the casing", across.valve[1] <= across.casing + 0.6,
+      `valve to ${across.valve[1].toFixed(1)}, casing ID at ${across.casing.toFixed(1)}`);
+check("the annulus gas ends at the valve", across.gap < 1, `${across.gap.toFixed(2)} away`);
+check("the packer seals tubing to casing with no gap",
+      across.packers.length === 2
+        && across.packers.every(([a, b]) => Math.abs(a - across.tubing) < 0.6
+                                            && Math.abs(b - across.casing) < 0.6),
+      across.packers.map(([a, b]) => `${a.toFixed(1)}-${b.toFixed(1)}`).join(", ")
+        + ` against ${across.tubing.toFixed(1)}-${across.casing.toFixed(1)}`);
+check("no drop is drawn outside the tubing", across.worstDrop <= across.bore,
+      `worst reaches ${across.worstDrop.toFixed(1)}, bore is ${across.bore.toFixed(1)}`);
+// The depth scales of the two panels must line up: a depth on the profile has to be at the same
+// height on the drawing beside it, which is the whole reason they share a top and bottom padding.
+const lineup = await page.evaluate(() => {
+  const chart = document.querySelector("#chart-profile").getBoundingClientRect();
+  const layout = window.__plots["chart-profile"].layout;
+  const deepest = layout.yaxis.range[0];
+  const plotTop = chart.top + layout.margin.t;
+  const plotH = chart.height - layout.margin.t - layout.margin.b;
+  const svg = document.querySelector("#flow-svg");
+  const box = svg.getBoundingClientRect();
+  const k = box.height / svg.viewBox.baseVal.height;
+  const ticks = [...svg.querySelectorAll("text.wv-depth")]
+    .filter((n) => /^[\d,]+$/.test(n.textContent))
+    .map((n) => {
+      const r = n.getBoundingClientRect();
+      return { ft: Number(n.textContent.replace(/,/g, "")), y: (r.top + r.bottom) / 2 };
+    });
+  return ticks.map((t) => ({ ft: t.ft, drawing: t.y,
+                             chart: plotTop + (t.ft / deepest) * plotH, k }));
+});
+check("a depth is at the same height on both panels",
+      lineup.length > 1 && lineup.every((t) => Math.abs(t.drawing - t.chart) < 3),
+      lineup.map((t) => `${t.ft}: ${t.drawing.toFixed(0)} vs ${t.chart.toFixed(0)}`).join(", "));
+check("the lift gas and the produced gas are the same colour",
+      await page.evaluate(() => {
+        const svg = document.querySelector("#flow-svg");
+        const lift = svg.querySelector("#wv-lift circle").getAttribute("fill");
+        return [...svg.querySelectorAll("#wv-fluid circle")].some((c) => c.getAttribute("fill") === lift);
+      }));
 // the gas bubbles above the valve must be bigger than the ones below it
 const bubbles = await page.evaluate(() => {
   const svg = document.querySelector("#flow-svg");
-  const valve = svg.querySelector("rect[fill='#1d8a7e']");
+  const valve = svg.querySelector("#wv-glvalve");
   const vy = valve.getBoundingClientRect().top;
+  const liftColour = svg.querySelector("#wv-lift circle").getAttribute("fill");
   const gas = [...svg.querySelectorAll("#wv-fluid circle")]
-    .filter((n) => getComputedStyle(n).fill === getComputedStyle(document.documentElement).getPropertyValue("--wv-gas").trim()
-                   || n.getAttribute("fill") === "var(--wv-gas)");
+    .filter((n) => n.getAttribute("fill") === liftColour);
   const above = gas.filter((n) => n.getBoundingClientRect().top < vy).map((n) => Number(n.getAttribute("r")));
   const below = gas.filter((n) => n.getBoundingClientRect().top > vy).map((n) => Number(n.getAttribute("r")));
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN);
@@ -324,9 +411,20 @@ await page.selectOption("#lift", "none");
 await page.waitForTimeout(300);
 await calc();
 
+// ---- what the well makes, across the top ----
+const kpis = await page.$eval("#kpis", (n) => n.innerText.toUpperCase());
+for (const want of ["LIQUID RATE", "OIL RATE", "WATER RATE", "GAS RATE", "DRAWDOWN"]) {
+  check(`the strip shows ${want.toLowerCase()}`, kpis.includes(want), kpis.replace(/\n/g, " | "));
+}
+check("the strip has a number in it", /\d/.test(kpis), kpis.replace(/\n/g, " | "));
+check("the strip sits above the charts", await page.evaluate(() => {
+  const k = document.querySelector("#kpis").getBoundingClientRect();
+  return k.bottom <= document.querySelector(".charts.three").getBoundingClientRect().top + 1;
+}));
+
 // ---- the telemetry replaces the old results strip ----
 const tele = await page.$eval("#results", (n) => n.innerText);
-for (const want of ["RATE", "PWF", "AOF", "RESERVOIR PRESSURE"]) {
+for (const want of ["PWF", "AOF", "RESERVOIR PRESSURE"]) {
   check(`the telemetry shows ${want.toLowerCase()}`, tele.toUpperCase().includes(want), tele.replace(/\n/g, " | "));
 }
 check("the telemetry sits beside the well",
@@ -352,10 +450,17 @@ check("the three columns are side by side",
       geo.nodal.left < geo.profile.left && geo.profile.left < geo.flow.left,
       `nodal ${geo.nodal.left}, profile ${geo.profile.left}, flow ${geo.flow.left}`);
 check("the input panel is narrower than before", geo.panel.w === 300, `${geo.panel.w}px`);
-check("the charts still have room", geo.nodal.w > 300 && geo.profile.w > 300,
+check("the charts still have room", geo.nodal.w > 300 && geo.profile.w > 250,
       `${geo.nodal.w}px and ${geo.profile.w}px`);
-check("the well column stays the narrowest of the three", geo.flow.w < geo.nodal.w,
-      `well ${geo.flow.w}px, charts ${geo.nodal.w}px`);
+// the drawing carries labels down both sides, so it is the one that needs the width; the profile
+// gives up about a seventh of its own to pay for it
+check("the well column is the widest of the three", geo.flow.w > geo.nodal.w,
+      `well ${geo.flow.w}px, inflow ${geo.nodal.w}px, profile ${geo.profile.w}px`);
+check("the profile is about a seventh narrower than the inflow chart",
+      Math.abs(geo.profile.w / geo.nodal.w - 0.85) < 0.05,
+      `${(100 * geo.profile.w / geo.nodal.w).toFixed(0)} % of it`);
+check("the three panel titles are centred", await page.$$eval(
+  ".charts.three > div > h2.sub", (ns) => ns.every((n) => getComputedStyle(n).textAlign === "center")));
 check("no sideways scrolling", !geo.overflowX);
 
 // and on a laptop, where it matters most
@@ -373,7 +478,7 @@ check("on a 1366px laptop the three still fit across",
       lapGeo.nodal.top === lapGeo.profile.top && lapGeo.profile.top === lapGeo.flow.top,
       `tops ${lapGeo.nodal.top}, ${lapGeo.profile.top}, ${lapGeo.flow.top}`);
 check("and the two charts are still usable",
-      lapGeo.nodal.w > 280 && lapGeo.profile.w > 280, `${lapGeo.nodal.w}px, ${lapGeo.profile.w}px`);
+      lapGeo.nodal.w > 280 && lapGeo.profile.w > 250, `${lapGeo.nodal.w}px, ${lapGeo.profile.w}px`);
 check("no sideways scrolling on a laptop", !lapGeo.overflowX);
 await lap.close();
 

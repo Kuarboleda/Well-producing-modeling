@@ -29,6 +29,13 @@ const GASLIFT_COLOUR = "#2ca02c"; // the gas lift injection depth
 const CURVE_POINTS = 41;          // points along the inflow curve on its own
 const NODAL_POINTS = 25;          // points along each curve when the VLP is calculated too
 
+// The shared depth scale.  The pressure and temperature profile and the wellbore schematic are the
+// same height and put TVD = 0 and the deepest point at the same two heights, so a depth read off
+// one panel is at the same place on the other: these are the chart's top and bottom margins, and
+// the schematic is told to use them as its own padding.
+const DEPTH_TOP = 100;            // pixels above TVD = 0: the top axis in one, the tree in the other
+const DEPTH_BOTTOM = 46;          // pixels below the deepest point: the bottom axis, and rock
+
 // ---------------------------------------------------------------------
 // Small helpers for reading the form
 // ---------------------------------------------------------------------
@@ -560,6 +567,73 @@ function drawExtras(items) {
     .join("");
 }
 
+/**
+ * The strip across the top of the three panels: what the well makes, and how hard it is pulling to
+ * make it.  These are the numbers someone looks for first, so they are not left to be found among
+ * the telemetry beside the drawing.
+ * @param {{key: string, value: string}[]} items @param {boolean} [waiting] true before Calculate
+ */
+function drawKpis(items, waiting = false) {
+  const list = document.getElementById("kpis");
+  if (!list) return;
+  list.classList.toggle("waiting", waiting);
+  list.innerHTML = items
+    .map((it) => `<li><span class="k">${it.key}</span><span class="v">${it.value}</span></li>`)
+    .join("");
+}
+
+/**
+ * What the well makes, for the strip across the top.
+ *
+ * The same five slots whichever fluid it is, so the strip does not rearrange itself when the fluid
+ * type changes: the liquid, what of it is saleable, the water, the gas, and the drawdown it takes.
+ * Before Calculate the labels are there and the values are dashes, so the strip is not a surprise
+ * that appears later.  The gas is the FORMATION gas; lift gas is injected, not produced, and the
+ * line under the drawing says how much of it is going in.
+ * @param {Case} c @param {{q: number, pwf: number} | null} res
+ */
+function kpiItems(c, res) {
+  const liquid = units.unitOf("liquidRate");
+  const gas = units.unitOf("gasRate");
+  const dp = units.unitOf("pressureDiff");
+  const q = res ? res.q : 0;
+  /** @param {number} x @param {import("./units.js").Quantity} quantity */
+  const v = (x, quantity) => (res ? show(units.fromEngine(quantity, x), 0) : "—");
+  if (c.fluid_type === "oil") {
+    const f = /** @type {vlp.OilWaterFluid} */ (c.fluid);
+    const oil = q * (1 - f.water_cut);
+    return [
+      { key: `Liquid rate (${liquid})`, value: v(q, "liquidRate") },
+      { key: `Oil rate (${liquid})`, value: v(oil, "liquidRate") },
+      { key: `Water rate (${liquid})`, value: v(q * f.water_cut, "liquidRate") },
+      { key: `Gas rate (${gas})`, value: v(oil * f.producingGor() / 1000, "gasRate") },
+      { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
+    ];
+  }
+  const f = /** @type {vlp.GasFluid} */ (c.fluid);
+  return [
+    { key: `Liquid rate (${liquid})`, value: v(q * (f.cgr + f.wgr) / 1000, "liquidRate") },
+    { key: `Condensate rate (${liquid})`, value: v(q * f.cgr / 1000, "liquidRate") },
+    { key: `Water rate (${liquid})`, value: v(q * f.wgr / 1000, "liquidRate") },
+    { key: `Gas rate (${gas})`, value: v(q, "gasRate") },
+    { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
+  ];
+}
+
+/**
+ * A round number to step an axis by, at or just above what was asked for: 1, 2, 2.5 or 5 times a
+ * power of ten.  Plotly picks its own steps well enough, but it stops the axis at the data, which
+ * leaves the last tick unlabelled - so the page works out the step itself and then rounds the axis
+ * out to a whole number of them.
+ * @param {number} rough
+ */
+function niceStep(rough) {
+  if (!(rough > 0)) return 1;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const n = rough / power;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * power;
+}
+
 /** One line under the telemetry saying what the well is doing. @param {string} text @param {boolean} [shut] */
 function wellState(text, shut = false) {
   const node = document.getElementById("well-state");
@@ -590,6 +664,27 @@ function layoutFor(xTitle, yTitle) {
     paper_bgcolor: "#fff",
     plot_bgcolor: "#fff",
     hovermode: "closest",
+  };
+}
+
+/**
+ * The layout of the inflow-and-tubing chart.
+ *
+ * The rate axis starts a whisker BELOW zero.  Drawn from exactly zero, its "0" tick label printed
+ * on top of the pressure axis's own "0" in the corner and the two were unreadable; starting a little
+ * to the left of the origin moves the rate's zero clear of the corner without moving the curves.
+ * @param {string} rateLabel @param {string} pressureLabel @param {number[]} q @param {number[]} p
+ */
+function nodalLayout(rateLabel, pressureLabel, q, p) {
+  const qMax = Math.max(...q, 1);
+  const pMax = Math.max(...p, 1);
+  const base = layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`);
+  return {
+    ...base,
+    xaxis: { title: { text: `Rate (${rateLabel})` }, zeroline: false, gridcolor: "#eef2f5",
+             range: [-qMax * 0.022, qMax * 1.03] },
+    yaxis: { title: { text: `Flowing bottom-hole pressure (${pressureLabel})` }, zeroline: false,
+             gridcolor: "#eef2f5", range: [0, pMax * 1.05] },
   };
 }
 
@@ -647,6 +742,7 @@ function recalculate() {
     lastCase = null;
     drawResults([]);
     drawExtras([]);
+    drawKpis([], true);
     wellState("");
     clearChart("chart-nodal");
     clearChart("chart-profile");
@@ -661,6 +757,7 @@ function recalculate() {
   } catch (error) {
     drawResults([]);
     drawExtras([]);
+    drawKpis(kpiItems(c, null), true);
     wellState("");
     clearChart("chart-nodal");
     drawTable([], [], "", "");
@@ -680,6 +777,7 @@ function recalculate() {
       value: show(units.fromEngine("pressure", c.p_res), 0) },
   ]);
   drawExtras(c.extra);
+  drawKpis(kpiItems(c, null), true);
   wellState("The inflow only. Press Calculate for the tubing, the operating point and the flow.");
   drawWell(c, null, 0);
   drawTable(pwfShown, qShown, rateLabel, pressureLabel);
@@ -687,11 +785,7 @@ function recalculate() {
     x: qShown, y: pwfShown, mode: "lines", name: "IPR",
     line: { color: IPR_COLOUR, width: 2.5 },
     hovertemplate: `%{x:,.0f} ${rateLabel}<br>%{y:,.0f} ${pressureLabel}<extra>IPR</extra>`,
-  }], {
-    ...layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`),
-    yaxis: { ...layoutFor("", "").yaxis, title: { text: `Flowing bottom-hole pressure (${pressureLabel})` },
-             range: [0, Math.max(...pwfShown) * 1.02] },
-  });
+  }], nodalLayout(rateLabel, pressureLabel, qShown, pwfShown));
   clearChart("chart-profile");
   const note = document.getElementById("profile-note");
   if (note) note.textContent = "";
@@ -757,25 +851,21 @@ function runNodal() {
                     mode: "markers", name: "Unstable crossing",
                     marker: { color: "#999", size: 9, symbol: "circle-open" } });
     }
-    items.push({ key: `Rate (${rateLabel})`, value: show(toRate(/** @type {number} */ (res.q)), 0) });
+    // the rates themselves are in the strip across the top; what belongs beside the drawing is
+    // the pressure it is flowing at and what the reservoir could give
     items.push({ key: `Pwf (${pressureLabel})`, value: show(toP(/** @type {number} */ (res.pwf)), 0) });
-    if (c.fluid_type === "oil") {
-      const wc = /** @type {vlp.OilWaterFluid} */ (c.fluid).water_cut;
-      items.push({ key: `Oil rate (${rateLabel})`,
-                   value: show(toRate(/** @type {number} */ (res.q)) * (1 - wc), 0) });
-    }
   }
   items.push({ key: `AOF (${rateLabel})`, value: show(toRate(res.aof), 0) });
   items.push({ key: `Reservoir pressure (${pressureLabel})`, value: show(toP(c.p_res), 0) });
   drawResults(items);
   drawExtras(c.extra);
+  drawKpis(kpiItems(c, res.found
+    ? { q: /** @type {number} */ (res.q), pwf: /** @type {number} */ (res.pwf) }
+    : null), !res.found);
 
+  const allQ = [...cv.ipr_q.map(toRate), ...cv.vlp_q.map(toRate)];
   const allP = [...cv.ipr_pwf.map(toP), ...cv.vlp_pwf.map(toP)];
-  plot("chart-nodal", traces, {
-    ...layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`),
-    yaxis: { ...layoutFor("", "").yaxis, title: { text: `Flowing bottom-hole pressure (${pressureLabel})` },
-             range: [0, Math.max(...allP) * 1.05] },
-  });
+  plot("chart-nodal", traces, nodalLayout(rateLabel, pressureLabel, allQ, allP));
   drawTable(cv.ipr_pwf.map(toP), cv.ipr_q.map(toRate), rateLabel, pressureLabel);
 
   const note = document.getElementById("profile-note");
@@ -898,9 +988,10 @@ function drawProfile(tr, c) {
   // Temperature on the bottom axis, pressure on the top one, and the pressure drawn in the same blue
   // as the IPR so that the pressure line is the same colour wherever it appears on the page.
   const pressure = tr.p.map((/** @type {number} */ p) => units.fromEngine("pressure", p));
+  const temperature = tr.T.map((/** @type {number} */ t) => units.fromEngine("temperature", t));
   /** @type {any[]} */
   const traces = [
-    { x: tr.T.map((/** @type {number} */ t) => units.fromEngine("temperature", t)), y: tvd,
+    { x: temperature, y: tvd,
       mode: "lines", name: `Temperature (${tempLabel})`,
       // solid, not dashed: the axis titles below are written in each line's own colour, which says
       // which line belongs to which axis better than a dash does
@@ -911,23 +1002,51 @@ function drawProfile(tr, c) {
       line: { color: IPR_COLOUR, width: 2.5 },
       hovertemplate: `%{x:,.0f} ${pressureLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
   ];
+  /** @type {any[]} */
+  const annotations = [];
   if (c.gas_lift) {
     const depth = units.fromEngine("length", wellmod.tvd_at(c.well, c.gas_lift.md));
     // drawn across the pressure axis, which is the line this depth belongs to
     traces.push({ x: [Math.min(...pressure), Math.max(...pressure)], y: [depth, depth], xaxis: "x2",
                   mode: "lines", name: "Gas injection",
                   line: { color: GASLIFT_COLOUR, width: 1.5, dash: "dash" } });
+    // and written on the line itself, so the depth can be read without going to the axis
+    annotations.push({
+      x: Math.max(...pressure), y: depth, xref: "x2", yref: "y",
+      text: `Gas lift injection at ${show(depth, 0)} ${lengthLabel}`,
+      showarrow: false, xanchor: "right", yanchor: "bottom", yshift: 3,
+      font: { color: GASLIFT_COLOUR, size: 11 },
+      bgcolor: "rgba(255, 255, 255, 0.82)",
+    });
   }
+  // Both axes are rounded out to a whole number of ticks.  Left to the data, the pressure axis
+  // stopped just above the deepest pressure with no tick to label it, and the temperature axis
+  // started just below the wellhead temperature and so never printed it.
+  const pStep = niceStep(Math.max(...pressure) / 4);
+  const tLo = Math.min(...temperature);
+  const tStep = niceStep(Math.max((Math.max(...temperature) - tLo) / 4, 1));
+  const tFrom = Math.floor(tLo / tStep) * tStep;
+  // the depth axis runs 0 to the deepest point exactly, which is what lets the wellbore schematic
+  // beside it put the same depths at the same heights
+  const deepest = Math.max(...tvd);
   plot("chart-profile", traces, {
     ...layoutFor(`Temperature (${tempLabel})`, `True vertical depth (${lengthLabel})`),
-    yaxis: { title: { text: `True vertical depth (${lengthLabel})` }, autorange: "reversed",
+    yaxis: { title: { text: `True vertical depth (${lengthLabel})` }, range: [deepest, 0],
              gridcolor: "#eef2f5", zeroline: false },
     xaxis: { title: { text: `Temperature (${tempLabel})`, font: { color: TEMP_COLOUR } },
-             tickfont: { color: TEMP_COLOUR }, gridcolor: "#eef2f5", zeroline: false },
+             tickfont: { color: TEMP_COLOUR }, gridcolor: "#eef2f5", zeroline: false,
+             tick0: tFrom, dtick: tStep,
+             range: [tFrom, Math.ceil(Math.max(...temperature) / tStep) * tStep] },
     xaxis2: { title: { text: `Pressure (${pressureLabel})`, font: { color: IPR_COLOUR } },
               tickfont: { color: IPR_COLOUR }, overlaying: "x", side: "top",
-              gridcolor: "transparent", zeroline: false, rangemode: "tozero" },
-    margin: { l: 70, r: 16, t: 42, b: 48 },
+              gridcolor: "transparent", zeroline: false, tick0: 0, dtick: pStep,
+              range: [0, Math.ceil(Math.max(...pressure) / pStep) * pStep] },
+    // inside the chart, in the corner the two lines leave empty: between the top axis title and its
+    // tick numbers the legend sat right where the pressure scale has to be read
+    legend: { x: 0.03, y: 0.03, xanchor: "left", yanchor: "bottom",
+              bgcolor: "rgba(255, 255, 255, 0.82)", bordercolor: "#e3e8ec", borderwidth: 1 },
+    annotations,
+    margin: { l: 70, r: 16, t: DEPTH_TOP, b: DEPTH_BOTTOM },
   });
 }
 
@@ -996,6 +1115,18 @@ function completionDepths(c) {
 
 /** @type {{view: any, player: any} | null} */
 let wellView = null;
+/** What was last drawn, so a window resize can draw it again at the new size. @type {any[] | null} */
+let lastWellArgs = null;
+
+// The drawing is sized from its box, so it has to be drawn again when the box changes.  Plotly
+// redraws itself (responsive: true); this does the same for the well.
+let resizeTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (lastWellArgs) drawWell(...(/** @type {[any, any, number, string, boolean]} */ (lastWellArgs)));
+  }, 150);
+});
 
 /**
  * Draw the well, and set the fluid moving at the rate that was found.
@@ -1005,8 +1136,20 @@ let wellView = null;
  * @param {boolean} borrowed whether that is a different correlation from the one in use
  */
 function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
+  lastWellArgs = [c, tr, rate, patternFrom, borrowed];
   const svg = /** @type {any} */ (document.getElementById("flow-svg"));
   if (!svg) return;
+  // The drawing is given the size of the box it is in, rather than a fixed size scaled to fit,
+  // because the depth scale has to be in step with the chart beside it: one drawing unit must be one
+  // pixel, or the padding that aligns the two panels would be scaled away with everything else.
+  const box = svg.parentElement;
+  if (box) {
+    const r = box.getBoundingClientRect();
+    if (r.width > 40 && r.height > 40) {
+      svg.setAttribute("data-w", String(Math.round(r.width)));
+      svg.setAttribute("data-h", String(Math.round(r.height)));
+    }
+  }
   const { perf_top, packer_md, shoe_md } = completionDepths(c);
   const oil = /** @type {vlp.OilWaterFluid} */ (c.fluid);
   const isOil = c.fluid_type === "oil";
@@ -1032,6 +1175,8 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     toShown: (ft) => units.fromEngine("length", ft),
     pattern: tr ? { md: tr.md, regime: tr.regime } : null,
     tree: true,
+    padTop: DEPTH_TOP,
+    padBottom: DEPTH_BOTTOM,
   };
   const view = wellview.render(svg, spec);
   if (wellView) wellView.player.replace(view);
@@ -1044,11 +1189,22 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     if (!tr) {
       legend.innerHTML = "";
     } else {
+      // the drops first - round, because that is how they are drawn - then the pattern bands
+      const phases = c.fluid_type === "oil"
+        ? [["oil", "Oil"], ["water", "Water"], ["gas", "Gas"]]
+        : [["gas", "Gas"], ["oil", "Condensate"], ["water", "Water"]];
       const rows = Object.keys(wellview.FLOW_FAMILIES)
         .filter((f) => view.families.has(f))
         .map((f) => `<span><i style="background:${wellview.FLOW_FAMILIES[f].colour}"></i>`
                     + `${wellview.FLOW_FAMILIES[f].label}</span>`);
-      let html = rows.join("");
+      let html = phases
+        .map(([key, label]) => `<span><i style="background:`
+             + `${wellview.PHASE_COLOURS[key]};border-radius:50%"></i>${label}</span>`)
+        .join("") + rows.join("");
+      if (c.gas_lift) {
+        html += `<span class="flow-note">The lift gas going down the annulus is the same green as `
+          + `the gas in the tubing, because it is the same gas.</span>`;
+      }
       if (borrowed) {
         html += `<span class="flow-note">The tubing is tinted by flow pattern. `
           + `${advice.nameOf(c.correlation)}, the correlation in use, works out none, so this is `
