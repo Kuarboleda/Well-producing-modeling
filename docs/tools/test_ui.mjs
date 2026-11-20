@@ -183,7 +183,25 @@ const sameRow = await page.evaluate(() => {
   return { same: Math.abs(a.top - b.top) < 2, label: document.querySelector("#p_res").closest("label").innerText.split("\n")[0] };
 });
 check("reservoir pressure and temperature sit on one line", sameRow.same, sameRow.label);
-check("the label is the short form", sameRow.label.startsWith("Reservoir pressure"), sameRow.label);
+// the paired boxes carry short names so neither wraps; the full name is on the label's tooltip
+check("the label is the short form", sameRow.label.startsWith("Pr"), sameRow.label);
+check("and the full name is still there to hover",
+      (await page.$eval("#p_res", (n) => n.closest("label").title)).toLowerCase()
+        .includes("reservoir pressure"),
+      await page.$eval("#p_res", (n) => n.closest("label").title));
+const wrapping = await page.evaluate(() => {
+  const out = [];
+  for (const row of document.querySelectorAll(".panel .row")) {
+    for (const l of row.querySelectorAll("label")) {
+      const inp = l.querySelector("input, select");
+      if (!inp) continue;
+      const h = inp.getBoundingClientRect().top - l.getBoundingClientRect().top;
+      if (h > 26) out.push(l.textContent.trim().split("\n")[0]);
+    }
+  }
+  return out;
+});
+check("no paired label wraps onto a second line", wrapping.length === 0, wrapping.join(" | "));
 
 // ---- the advice is one line, with the reasons behind the (i) ----
 const shortText = await page.$eval("#corr-short", (n) => n.innerText);
@@ -220,90 +238,105 @@ check("the bottom axis title is in the temperature colour",
 check("the top axis title is in the pressure colour",
       prof.layout.xaxis2.title.font.color === pline.line.color);
 
-// ---- the flow pattern drawing ----
-check("the tubing is drawn", (await flowSvg()).includes("<rect") && (await flowSvg()).includes("perforations"));
-const blocks = await page.$$eval("#flow-svg rect", (ns) => ns.length);
-check("one block per step of the traverse, plus the wall", blocks > 50, `${blocks} rectangles`);
-check("every block says its pattern and depth on hover",
-      (await flowSvg()).includes("<title>") && (await flowSvg()).includes("ft MD"));
-const await_legend = await legend();
-check("the legend names the patterns found", await_legend.length > 0, await_legend.split("\n")[0]);
-// the correlation in use here is Hagedorn and Brown, which works out no pattern, so the drawing
-// borrows one and names the five that do
-check("the note names the five that work out a pattern",
-      ["Beggs and Brill", "Orkiszewski", "Duns and Ros", "Ansari", "Mukherjee and Brill"]
-        .every((n) => (await_legend).includes(n)), (await_legend).slice(-170));
-check("Beggs and Brill's names are translated, not shown raw",
-      !(await legend()).toLowerCase().includes("intermittent 8") , await legend());
-const depthMarks = await page.$$eval("#flow-svg text", (ns) => ns.map((n) => n.textContent));
-check("the depth scale is there", depthMarks.includes("0") && depthMarks.some((t) => t === "8,000"),
-      depthMarks.join(" "));
-
-// ---- the pattern is borrowed when the chosen correlation works out none ----
-// Hagedorn and Brown is what the app suggests for this well and it identifies no pattern, so the
-// drawing must borrow one rather than stand empty - and must say whose it is.
-await page.click("#btn-follow").catch(() => {});
-await page.selectOption("#correlation", "hagedorn_brown");
-await page.waitForTimeout(250);
-await calc();
-const borrowedNote = await legend();
-check("a correlation with no pattern of its own borrows one",
-      !borrowedNote.includes("Not identified by this correlation"), borrowedNote.split("\n")[0]);
-check("and the drawing says whose pattern it is",
-      borrowedNote.includes("works out no flow pattern") && borrowedNote.includes("This pattern is from"),
-      borrowedNote.slice(-200));
-check("it is one of the five that do work one out",
-      PATTERN_ONES.some((k) => borrowedNote.includes({ beggs_brill: "Beggs and Brill",
-        orkiszewski: "Orkiszewski", duns_ros: "Duns and Ros", ansari: "Ansari",
-        mukherjee_brill: "Mukherjee and Brill" }[k])), borrowedNote.slice(-200));
-check("and it says the pressures are still the chosen correlation's",
-      borrowedNote.includes("Every pressure on this page is still Hagedorn and Brown"),
-      borrowedNote.slice(-120));
-check("the borrowed drawing is actually filled in",
-      (await flowSvg()).includes("<rect") && (await flowSvg()).includes("<title>"));
-// the profile on the same screen must still be Hagedorn and Brown's own pressures
-const hbProf = await page.evaluate(() => window.__plots["chart-profile"]);
-check("the profile is unchanged by the borrowing", hbProf.traces.length >= 2);
-
-// a correlation whose names are completely different must still be understood
-// Gray is not offered for an oil well, so it is checked under the gas well below
-for (const [corr, want] of [["ansari", "Slug"], ["duns_ros", null], ["orkiszewski", null],
-                            ["mukherjee_brill", null], ["fancher_brown", null]]) {
-  await page.selectOption("#correlation", corr);
-  await page.waitForTimeout(200);
-  await calc();
-  const l = await legend();
-  check(`${corr}: its patterns are named in the legend`, l.length > 0 && !l.includes("undefined"), l.split("\n")[0]);
-  if (PATTERN_ONES.includes(corr)) {
-    check(`${corr}: it works out real patterns, so nothing is blank`,
-          !l.includes("Not identified"), l.split("\n").slice(0, 3).join(" / "));
-  }
-  if (want) check(`${corr}: ${want} appears`, l.includes(want), l);
+// ---- the live well beside the charts ----
+check("the well is drawn", (await flowSvg()).includes("<path") && (await flowSvg()).includes("Perforations"));
+const svgText = () => page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent));
+const parts = await svgText();
+for (const want of ["Christmas tree", "Tubing head", "Cement sheath", "Production casing",
+                    "Annulus", "Production tubing", "Production packer", "Open tubing shoe",
+                    "Perforations"]) {
+  check(`the well labels the ${want.toLowerCase()}`, parts.includes(want), parts.join(" | "));
 }
+check("the fluid is drawn as particles",
+      (await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.length)) > 20);
+check("fluid enters through the perforations",
+      (await page.$$eval("#flow-svg #wv-inflow circle", (ns) => ns.length)) > 5);
+const moved1 = await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.slice(0, 5).map((n) => n.getAttribute("cy")));
+await page.waitForTimeout(600);
+const moved2 = await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.slice(0, 5).map((n) => n.getAttribute("cy")));
+check("and it is moving", moved1.join() !== moved2.join());
+check("the tubing is tinted by flow pattern", (await legend()).length > 0, (await legend()).split("\n")[0]);
 
-// a gas well, where the pattern should be annular or mist over most of the well
-await page.selectOption("#fluid_type", "gas");
-await page.waitForTimeout(250);
-await page.$eval("#p_res", (n) => { n.value = "4500"; n.dispatchEvent(new Event("input", { bubbles: true })); });
-await page.waitForTimeout(200);
+// the packer must sit ABOVE the perforations and the shoe between them, which is the whole point
+const depths = await page.evaluate(() => {
+  const svg = document.querySelector("#flow-svg");
+  const y = (sel) => { const n = svg.querySelector(sel); return n ? n.getBoundingClientRect().top : NaN; };
+  const labels = [...svg.querySelectorAll("text.wv-lbl")];
+  const dot = (t) => { const i = labels.findIndex((n) => n.textContent === t);
+    return i < 0 ? NaN : labels[i].getBoundingClientRect().top; };
+  const perfMarks = [...svg.querySelectorAll("path")].filter((n) => n.getAttribute("stroke") === "#8c3b2e");
+  const packers = [...svg.querySelectorAll("rect")].filter((n) => n.getAttribute("fill") === "#3f4b56");
+  return {
+    topPerf: Math.min(...perfMarks.map((n) => n.getBoundingClientRect().top)),
+    packer: Math.min(...packers.map((n) => n.getBoundingClientRect().top)),
+    nPerf: perfMarks.length, nPacker: packers.length,
+  };
+});
+check("the packer is drawn", depths.nPacker >= 2, `${depths.nPacker} parts`);
+check("the perforations are drawn", depths.nPerf >= 8, `${depths.nPerf} marks`);
+check("the packer sits ABOVE the top of the perforations", depths.packer < depths.topPerf - 4,
+      `packer at ${Math.round(depths.packer)}px, top perforation at ${Math.round(depths.topPerf)}px`);
+
+// ---- gas lift: in at the tubing head, down the annulus, through the valve ----
+// the page was reloaded earlier in this test, so the sidebar sections are closed again
+await page.$$eval("details.group", (ds) => ds.forEach((d) => { d.open = true; }));
+await page.waitForTimeout(150);
+await page.selectOption("#lift", "continuous");
+await page.waitForTimeout(300);
 await calc();
-check("a gas well draws a pattern too", (await flowSvg()).includes("<rect"), (await legend()).split("\n")[0]);
-// a WET gas, so there are two phases to have a pattern at all: a dry gas is single-phase gas and
-// every correlation correctly says so
-await page.$eval("#cgr", (n) => { n.value = "25"; n.dispatchEvent(new Event("input", { bubbles: true })); });
-await page.selectOption("#correlation", "gray");
-await page.waitForTimeout(250);
+const liftParts = await svgText();
+check("the gas lift valve is drawn", liftParts.includes("Gas lift valve"), liftParts.join(" | "));
+check("the lift gas enters at the tubing head", liftParts.includes("lift gas in"));
+check("there is a line down the annulus", await page.$eval("#flow-svg #wv-liftline", (n) => Boolean(n)));
+check("and gas moving along it",
+      (await page.$$eval("#flow-svg #wv-lift circle", (ns) => ns.length)) > 5);
+// the injection port and the gas must be on the same side of the well
+const sides = await page.evaluate(() => {
+  const svg = document.querySelector("#flow-svg");
+  const port = [...svg.querySelectorAll("text.wv-lbl")].find((n) => n.textContent === "lift gas in");
+  const line = svg.querySelector("#wv-liftline");
+  const bore = svg.querySelector("#wv-flowline");
+  return { port: port.getBoundingClientRect().left, line: line.getBoundingClientRect().left,
+           bore: bore.getBoundingClientRect().left };
+});
+check("the lift gas goes down the side it came in on", sides.line < sides.bore + 4,
+      `port ${Math.round(sides.port)}, annulus line ${Math.round(sides.line)}, bore ${Math.round(sides.bore)}`);
+// the gas bubbles above the valve must be bigger than the ones below it
+const bubbles = await page.evaluate(() => {
+  const svg = document.querySelector("#flow-svg");
+  const valve = svg.querySelector("rect[fill='#1d8a7e']");
+  const vy = valve.getBoundingClientRect().top;
+  const gas = [...svg.querySelectorAll("#wv-fluid circle")]
+    .filter((n) => getComputedStyle(n).fill === getComputedStyle(document.documentElement).getPropertyValue("--wv-gas").trim()
+                   || n.getAttribute("fill") === "var(--wv-gas)");
+  const above = gas.filter((n) => n.getBoundingClientRect().top < vy).map((n) => Number(n.getAttribute("r")));
+  const below = gas.filter((n) => n.getBoundingClientRect().top > vy).map((n) => Number(n.getAttribute("r")));
+  const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN);
+  return { above: mean(above), below: mean(below), nAbove: above.length, nBelow: below.length };
+});
+if (bubbles.nAbove > 2 && bubbles.nBelow > 2) {
+  check("the gas bubbles are bigger above the gas lift valve", bubbles.above > bubbles.below,
+        `${bubbles.above.toFixed(2)}px above, ${bubbles.below.toFixed(2)}px below`);
+}
+check("no bubble is wider than the tubing it is in",
+      (await page.$$eval("#flow-svg #wv-fluid circle", (ns) => Math.max(...ns.map((n) => Number(n.getAttribute("r")))))) < 12);
+await page.selectOption("#lift", "none");
+await page.waitForTimeout(300);
 await calc();
-const grayNote = await legend();
-check("Gray, which works out no pattern of its own, borrows one and says so",
-      grayNote.includes("works out no flow pattern") && grayNote.includes("This pattern is from")
-        && !grayNote.includes("Not identified by this correlation"), grayNote.slice(-200));
-check("and says the pressures are still Gray's",
-      grayNote.includes("Every pressure on this page is still Gray"), grayNote.slice(-90));
-await page.$eval("#cgr", (n) => { n.value = "0"; n.dispatchEvent(new Event("input", { bubbles: true })); });
-await page.selectOption("#fluid_type", "oil");
-await page.$eval("#p_res", (n) => { n.value = "3000"; n.dispatchEvent(new Event("input", { bubbles: true })); });
-await page.waitForTimeout(250);
+
+// ---- the telemetry replaces the old results strip ----
+const tele = await page.$eval("#results", (n) => n.innerText);
+for (const want of ["RATE", "PWF", "AOF", "RESERVOIR PRESSURE"]) {
+  check(`the telemetry shows ${want.toLowerCase()}`, tele.toUpperCase().includes(want), tele.replace(/\n/g, " | "));
+}
+check("the telemetry sits beside the well",
+      await page.evaluate(() => document.querySelector("#results").closest(".flowcol") !== null));
+check("the model's own numbers are under the charts",
+      (await page.$eval("#extras", (n) => n.innerText)).toUpperCase().includes("BUBBLE POINT"),
+      await page.$eval("#extras", (n) => n.innerText));
+check("a line says what the well is doing",
+      (await page.$eval("#well-state", (n) => n.innerText)).includes("Flowing"),
+      await page.$eval("#well-state", (n) => n.innerText));
 
 // ---- the three columns fit, and nothing overflows ----
 await page.setViewportSize({ width: 1600, height: 900 });
@@ -321,7 +354,8 @@ check("the three columns are side by side",
 check("the input panel is narrower than before", geo.panel.w === 300, `${geo.panel.w}px`);
 check("the charts still have room", geo.nodal.w > 300 && geo.profile.w > 300,
       `${geo.nodal.w}px and ${geo.profile.w}px`);
-check("the well column is narrow", geo.flow.w < 260, `${geo.flow.w}px`);
+check("the well column stays the narrowest of the three", geo.flow.w < geo.nodal.w,
+      `well ${geo.flow.w}px, charts ${geo.nodal.w}px`);
 check("no sideways scrolling", !geo.overflowX);
 
 // and on a laptop, where it matters most

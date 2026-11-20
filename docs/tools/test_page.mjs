@@ -49,7 +49,9 @@ const val = (id) => page.$eval(`#${id}`, (n) => n.value);
 const setVal = async (id, v) => {
   await page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event("input", { bubbles: true })); }, v);
 };
-const results = () => page.$$eval("#results li", (lis) => lis.map(
+// the telemetry beside the well, plus the inflow model's own numbers under the charts: between
+// them they are what the page reports, and a check should not care which list a number is in
+const results = () => page.$$eval("#results li, #extras li", (lis) => lis.map(
   (li) => [li.querySelector(".k")?.textContent || "", li.querySelector(".v")?.textContent || ""]));
 const numberFrom = (pairs, key) => {
   const hit = pairs.find(([k]) => k.includes(key));

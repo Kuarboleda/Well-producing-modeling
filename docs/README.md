@@ -42,10 +42,21 @@ measurable rather than a matter of taste, so it was measured:
 * The Equipment section draws **the well**: its path, the tubing, the perforations and the gas lift
   injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
   the perforations is obvious in a picture and invisible in a column of numbers.
-* Beside the pressure and temperature profile, a second drawing shows **the flow pattern in the
-  tubing**: the pipe from wellhead to perforations, coloured by the pattern the correlation reports
-  at each step, with bubbles, slugs or a wall film drawn inside it and the depths where the pattern
-  changes marked.
+* Beside the pressure and temperature profile is **the well itself**, drawn from the inputs: the
+  Christmas tree, the casing, the cement, the tubing, the production packer, the open tubing shoe,
+  the gas lift valve and the perforations, with a depth scale and the fluid animated through them.
+  Formation fluid enters through the perforations, rises inside the casing below the packer and
+  turns into the open end of the tubing; the tubing itself is tinted by the flow pattern the
+  correlation reports at each depth.
+
+  The packer is drawn **above** the top of the perforations and the shoe between the two, because
+  that is where they go: a packer seals the annulus off above the producing interval. With gas lift
+  on, the lift gas enters the annulus at the tubing head, travels down it to the valve at its own
+  depth and passes through into the tubing; above that depth the gas bubbles are bigger and keep
+  growing towards surface, as gas does when the pressure falls.
+
+  The telemetry - rate, Pwf, oil rate, AOF, reservoir pressure - sits beside the drawing, which is
+  the same information the old strip above the charts carried.
 
   Only five of the eight work out a pattern at all: Hagedorn and Brown has one holdup correlation for
   everything, Gray assumes the gas is continuous without naming a pattern, and Fancher and Brown
@@ -59,25 +70,6 @@ measurable rather than a matter of taste, so it was measured:
 * The well is **remembered in this browser** (and only there - nothing is sent anywhere), so a
   refresh does not throw it away. **Reset** puts the starting values back. A first-time visitor sees
   the starting well, not someone else's.
-
-## The wellbore schematic
-
-`schematic.html` is a cross-section of a flowing well - Christmas tree, master and wing valves,
-production casing, cement sheath, tubing, packer, gas lift valve and perforations - with the
-produced fluid animated from the perforations, up the tubing and out of the wing valve as oil, gas
-and water particles in the proportions the water cut and GOR give. A choke slider, a master valve
-switch and a gas lift toggle with its own rate and depth drive it.
-
-**The telemetry is not invented for the animation.** The choke sets the wellhead pressure the well
-has to flow against - wide open, a flowline pressure; closing, up towards the shut-in tubing head
-pressure - and the same engine as the rest of this app solves the inflow and the tubing for where
-they balance. The wellhead pressure, bottomhole pressure and rates shown are what comes back, and
-the rate also sets how fast the fluid moves on screen. A solve takes about 90 ms, so a slider can do
-it as it moves. Close the master valve and the rate goes to zero, the bottomhole pressure builds back
-to the reservoir pressure, and the drawing says so.
-
-It is one HTML file with its own CSS and JavaScript, but it is not standalone: it imports the engine
-from the files beside it. It could be made standalone, at the cost of the numbers being made up.
 
 ## Choosing the correlation
 
@@ -96,12 +88,12 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | File | What it is |
 |---|---|
 | `index.html` | the page: the input panel on the left, three tabs on the right |
-| `schematic.html` | a separate page: an interactive cross-section of a flowing well, animated, with its own choke, master valve and gas lift controls |
 | `app.js` | wiring only - reads the boxes, calls the engine, draws the charts. No engineering in it |
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
 | `vlp.js` | translation of `vlp.py`: the fluids, the pressure traverse and all eight gradient correlations - friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros, Ansari, Mukherjee and Brill, Fancher and Brown |
 | `well.js` | translation of `well.py`: the survey, cutting the well into steps, the temperature profile |
+| `wellview.js` | the live well drawing: the completion, and the fluid animated through it |
 | `nodal.js` | translation of `nodal.py`: the operating point, VLP matching, sensitivities |
 | `advice.js` | translation of the advice part of `app_helpers.py`: which correlation suits this well, and why |
 | `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
@@ -110,8 +102,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
 | `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
-| `tools/test_schematic.mjs` | drives the wellbore schematic: every part drawn, the fluid moving, and the telemetry answering the choke, the master valve and gas lift the way the physics says it must (47 checks) |
-| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the two well drawings, the flow patterns of every correlation, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout (71 checks) |
+| `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, both well drawings, the packer above the perforations, the gas lift path and bubble growth, the telemetry, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout |
 | `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one

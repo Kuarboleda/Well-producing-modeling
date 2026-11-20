@@ -174,15 +174,32 @@
   .results li { margin: 0 0 8px; }
   .results .k { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
   .results .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  /* beside the well the telemetry is a column of label-and-value rows, not a wide strip */
+  .flowcol .results { display: block; margin: 12px 0 8px; }
+  .flowcol .results li { display: flex; align-items: baseline; justify-content: space-between;
+                         gap: 10px; margin: 0 0 5px; }
+  .flowcol .results .k { font-size: 10.5px; }
+  .flowcol .results .v { font-size: 17px; }
+  .results.small { gap: 0 20px; margin-top: 10px; }
+  .results.small .v { font-size: 14px; }
+  .results.small .k { font-size: 10px; }
+  #well-state { font-size: 12px; color: var(--ink-soft); background: var(--panel);
+                border-radius: 5px; padding: 7px 9px; margin: 0 0 8px; }
+  #well-state.shut { background: #fff1f0; color: #8b1a1f; }
+  #flow-svg { width: 100%; height: 100%; }
+  #flow-svg text.wv-lbl { font-size: 10px; fill: var(--ink); }
+  #flow-svg text.wv-depth { font-size: 9px; fill: var(--ink-soft); }
+  /* the fluid colours, which wellview.js asks for by name */
+  :root { --wv-oil: #2f9e44; --wv-gas: #f0a202; --wv-water: #3b82c4; }
 
   .charts { display: flex; flex-wrap: wrap; gap: 16px; }
   .charts > div { flex: 1 1 380px; min-width: 0; }
   /* three across: the two charts share the room and the well drawing takes a narrow column, because
      it is tall and thin by nature */
   .charts.three > div { flex: 1 1 300px; }
-  .charts.three > .flowcol { flex: 0 1 190px; }
+  .charts.three > .flowcol { flex: 0 1 360px; }
   .chart { width: 100%; height: 440px; }
-  .flowcol .chart { display: flex; justify-content: center; }
+  .flowcol .chart { display: flex; justify-content: center; height: 560px; }
   #flow-svg { height: 100%; max-width: 100%; }
   .flow-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px;
                  color: var(--ink-soft); margin-top: 8px; }
@@ -236,7 +253,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 20 Nov 2026 16:44 (cf4b8b4)</span>
+  <span class="sub build" id="build">build 20 Nov 2026 20:22 (6a37fee)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -244,7 +261,6 @@
       <option value="metric">Metric</option>
     </select>
   </label>
-  <a class="toplink" href="schematic.html">Wellbore schematic</a>
   <button id="btn-save">Save case</button>
   <button id="btn-open">Open case</button>
   <input type="file" id="file-open" accept=".json" class="hidden">
@@ -265,10 +281,10 @@
           </select>
         </label>
         <div class="row">
-          <label>Reservoir pressure <span class="u" data-unit="pressure"></span>
+          <label title="Static reservoir pressure">Pr <span class="u" data-unit="pressure"></span>
             <input type="number" id="p_res" value="3000" step="50" min="1">
           </label>
-          <label>Temperature <span class="u" data-unit="temperature"></span>
+          <label title="Reservoir temperature">Tr <span class="u" data-unit="temperature"></span>
             <input type="number" id="t_res" value="200" step="5">
           </label>
         </div>
@@ -289,7 +305,7 @@
           </label>
 
           <div id="f-vogel" class="row">
-            <label>Test rate <span class="u" data-unit="liquidRate"></span>
+            <label title="Flowing test rate">Test rate <span class="u" data-unit="liquidRate"></span>
               <input type="number" id="vogel_q" value="2000" step="100" min="0.001">
             </label>
             <label>Test Pwf <span class="u" data-unit="pressure"></span>
@@ -318,10 +334,10 @@
 
           <div id="f-darcy">
             <div class="row">
-              <label>Permeability k <span class="u" data-unit="permeability"></span>
+              <label title="Permeability">k <span class="u" data-unit="permeability"></span>
                 <input type="number" id="oil_k" value="50" step="5" min="0.0001">
               </label>
-              <label>Net thickness h <span class="u" data-unit="length"></span>
+              <label title="Net pay thickness">h <span class="u" data-unit="length"></span>
                 <input type="number" id="oil_h" value="20" step="5" min="0.0001">
               </label>
             </div>
@@ -334,10 +350,10 @@
               </label>
             </div>
             <div class="row">
-              <label>Drainage radius re <span class="u" data-unit="length"></span>
+              <label title="Drainage radius">re <span class="u" data-unit="length"></span>
                 <input type="number" id="oil_re" value="1000" step="50" min="0.01">
               </label>
-              <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+              <label title="Wellbore radius">rw <span class="u" data-unit="length"></span>
                 <input type="number" id="oil_rw" value="0.354" step="0.01" min="0.001">
               </label>
             </div>
@@ -352,10 +368,10 @@
               </select>
             </label>
             <div id="f-transient" class="row">
-              <label>Porosity <span class="u" data-unit="fraction"></span>
+              <label title="Porosity, fraction of the rock that is pore space">Porosity <span class="u" data-unit="fraction"></span>
                 <input type="number" id="oil_phi" value="0.2" step="0.01" min="0.001" max="1">
               </label>
-              <label>ct <span class="u" data-unit="compressibility"></span>
+              <label title="Total compressibility">ct <span class="u" data-unit="compressibility"></span>
                 <input type="number" id="oil_ct" value="0.00001" step="0.000001" min="0.0000001">
               </label>
               <label>Time <span class="u" data-unit="time"></span>
@@ -377,18 +393,18 @@
 
           <div id="f-gasrock">
             <div class="row">
-              <label>Permeability k <span class="u" data-unit="permeability"></span>
+              <label title="Permeability">k <span class="u" data-unit="permeability"></span>
                 <input type="number" id="gas_k" value="5" step="1" min="0.0001">
               </label>
-              <label>Net thickness h <span class="u" data-unit="length"></span>
+              <label title="Net pay thickness">h <span class="u" data-unit="length"></span>
                 <input type="number" id="gas_h" value="40" step="5" min="0.0001">
               </label>
             </div>
             <div class="row">
-              <label>Drainage radius re <span class="u" data-unit="length"></span>
+              <label title="Drainage radius">re <span class="u" data-unit="length"></span>
                 <input type="number" id="gas_re" value="1000" step="50" min="0.01">
               </label>
-              <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+              <label title="Wellbore radius">rw <span class="u" data-unit="length"></span>
                 <input type="number" id="gas_rw" value="0.354" step="0.01" min="0.001">
               </label>
             </div>
@@ -420,10 +436,10 @@
       <div>
         <div id="pvt-oil">
           <div class="row">
-            <label>Oil gravity <span class="u">API</span>
+            <label title="Stock-tank oil gravity">Oil API <span class="u">degAPI</span>
               <input type="number" id="api" value="35" step="1" min="5" max="70">
             </label>
-            <label>Solution gas gravity <span class="u">air = 1</span>
+            <label title="Solution gas gravity">Gas SG <span class="u">air = 1</span>
               <input type="number" id="gas_sg" value="0.75" step="0.01" min="0.55" max="1.5">
             </label>
           </div>
@@ -437,7 +453,7 @@
             <label>Water cut <span class="u">%</span>
               <input type="number" id="water_cut" value="30" step="5" min="0" max="99">
             </label>
-            <label>Water specific gravity <span class="u">fresh = 1</span>
+            <label title="Water specific gravity">Water SG <span class="u">fresh = 1</span>
               <input type="number" id="water_sg" value="1.02" step="0.01" min="1" max="1.25">
             </label>
           </div>
@@ -464,23 +480,23 @@
 
         <div id="pvt-gas">
           <div class="row">
-            <label>Gas gravity <span class="u">air = 1</span>
+            <label title="Separator (dry) gas gravity">Gas SG <span class="u">air = 1</span>
               <input type="number" id="gas_sg_g" value="0.65" step="0.01" min="0.5" max="1.5">
             </label>
-            <label>Water specific gravity <span class="u">fresh = 1</span>
+            <label title="Water specific gravity">Water SG <span class="u">fresh = 1</span>
               <input type="number" id="water_sg_g" value="1.02" step="0.01" min="1" max="1.25">
             </label>
           </div>
           <div class="row">
-            <label>Condensate-gas ratio <span class="u">STB/MMscf</span>; 0 = dry
+            <label title="Condensate-gas ratio; 0 = dry gas">CGR <span class="u">STB/MMscf</span>
               <input type="number" id="cgr" value="0" step="5" min="0" max="1000">
             </label>
-            <label>Condensate gravity <span class="u">API</span>
+            <label title="Condensate gravity">Cond. API <span class="u">degAPI</span>
               <input type="number" id="cond_api" value="50" step="1" min="30" max="70">
             </label>
           </div>
           <div class="row">
-            <label>Water-gas ratio <span class="u">STB/MMscf</span>
+            <label title="Water-gas ratio">WGR <span class="u">STB/MMscf</span>
               <input type="number" id="wgr" value="0" step="1" min="0" max="1000">
             </label>
             <label>H2S <span class="u">mole %</span>
@@ -531,10 +547,10 @@
         </div>
         <p class="hint">The perforation depth is the reference depth for reservoir pressure and temperature.</p>
         <div class="row">
-          <label>Tubing inner diameter <span class="u">in</span>
+          <label title="Tubing inner diameter">Tubing ID <span class="u">in</span>
             <input type="number" id="tubing_id" value="2.992" step="0.1" min="0.5" max="12">
           </label>
-          <label>Pipe roughness <span class="u">in</span>
+          <label title="Absolute pipe roughness">Roughness <span class="u">in</span>
             <input type="number" id="roughness_in" value="0.0006" step="0.0001" min="0" max="0.1">
           </label>
         </div>
@@ -544,10 +560,10 @@
         <fieldset>
           <legend>Temperature profile</legend>
           <div class="row">
-            <label>Ambient at surface <span class="u" data-unit="temperature"></span>
+            <label title="Ambient temperature at surface">T ambient <span class="u" data-unit="temperature"></span>
               <input type="number" id="t_amb_surface" value="80" step="5">
             </label>
-            <label>U at surface <span class="u">Btu/h/ft2/F</span>
+            <label title="Overall heat transfer coefficient at surface">U <span class="u">Btu/h/ft2/F</span>
               <input type="number" id="u_surface" value="5" step="0.5" min="0" max="50">
             </label>
           </div>
@@ -556,10 +572,10 @@
             Ambient at perforations = reservoir temperature
           </label>
           <div class="row">
-            <label id="f-tperf">Ambient at perforations <span class="u" data-unit="temperature"></span>
+            <label id="f-tperf" title="Ambient temperature at the perforations">T at perfs <span class="u" data-unit="temperature"></span>
               <input type="number" id="t_amb_perf" value="200" step="5">
             </label>
-            <label>U at perforations <span class="u">Btu/h/ft2/F</span>
+            <label title="Overall heat transfer coefficient at the perforations">U at perfs <span class="u">Btu/h/ft2/F</span>
               <input type="number" id="u_perf" value="5" step="0.5" min="0" max="50">
             </label>
           </div>
@@ -581,18 +597,18 @@
           <p class="hint">The lift gas is injected at one depth (valve or orifice). Above that depth the
             tubing carries the formation gas plus the lift gas, so the column is lighter.</p>
           <div class="row">
-            <label>Gas injection rate <span class="u" data-unit="gasRate"></span>
+            <label title="Gas lift injection rate">Gas rate <span class="u" data-unit="gasRate"></span>
               <input type="number" id="gl_rate" value="1000" step="100" min="0">
             </label>
-            <label>Injection depth <span class="u" data-unit="length"></span>
+            <label title="Depth of the gas lift injection point">Inj. depth <span class="u" data-unit="length"></span>
               <input type="number" id="gl_md" value="6000" step="100" min="100">
             </label>
           </div>
           <div class="row">
-            <label>Injection gas gravity <span class="u">air = 1</span>
+            <label title="Injection gas gravity">Inj. gas SG <span class="u">air = 1</span>
               <input type="number" id="gl_sg" value="0.65" step="0.01" min="0.55" max="1.5">
             </label>
-            <label>Injection pressure at wellhead <span class="u" data-unit="pressure"></span>
+            <label title="Gas injection pressure at the wellhead">Inj. pressure <span class="u" data-unit="pressure"></span>
               <input type="number" id="gl_p_inj" value="1500" step="50" min="0">
             </label>
           </div>
@@ -651,10 +667,6 @@
           comes, then matches the one you keep. No correlation is right until it is checked against
           something measured.</li>
       </ol>
-      <p>The <b>Wellbore schematic</b> link at the top opens a separate page: a cross-section of a
-        flowing well with the fluid animated up the tubing, a choke, a master valve and a gas lift
-        valve you can work, and the pressures and rates calculated by this same engine as you move
-        them. It is a demonstration of how a well responds, not a second copy of this tool.</p>
       <p><b>Save case</b> writes the well to a small file on your computer, and <b>Open case</b>
         reads one back. The well you are working on is also remembered in this browser, so a refresh
         does not lose it; <b>Reset</b> puts everything back to the starting values.</p>
@@ -668,7 +680,6 @@
 
     <!-- ---------- the operating point ---------- -->
     <section class="tabpage on" id="page-nodal">
-      <ul class="results" id="results"></ul>
       <div id="messages"></div>
       <div class="charts three">
         <div>
@@ -680,15 +691,18 @@
           <div class="chart" id="chart-profile"></div>
         </div>
         <div class="flowcol">
-          <h2 class="sub">Flow pattern in the tubing</h2>
+          <h2 class="sub">The well</h2>
           <div class="chart" id="flow-well">
-            <svg id="flow-svg" viewBox="0 0 150 420" preserveAspectRatio="xMidYMid meet" role="img"
-                 aria-label="The tubing from wellhead to perforations, coloured by flow pattern"></svg>
+            <svg id="flow-svg" data-w="360" data-h="660" preserveAspectRatio="xMidYMid meet" role="img"
+                 aria-label="The well from the tubing head to the perforations, with the fluid flowing"></svg>
           </div>
+          <ul class="results" id="results"></ul>
+          <p class="state" id="well-state"></p>
           <div id="flow-legend" class="flow-legend"></div>
         </div>
       </div>
       <p class="caption" id="profile-note"></p>
+      <ul class="results small" id="extras"></ul>
       <details class="more">
         <summary>The inflow curve as numbers</summary>
         <table class="data" id="curve-table"></table>
@@ -701,7 +715,7 @@
         <label>Vary
           <select id="sens_name"></select>
         </label>
-        <label>Values, separated by commas
+        <label title="The values to try, separated by commas">Values
           <input type="text" id="sens_values" value="">
         </label>
       </div>
@@ -760,19 +774,19 @@
               <input type="number" id="vc_rate_gas" value="5000" step="100" min="0.001">
             </label>
             <div class="row">
-              <label>Condensate-gas ratio <span class="u">STB/MMscf</span>
+              <label title="Condensate-gas ratio of the test">CGR <span class="u">STB/MMscf</span>
                 <input type="number" id="vc_cgr" value="0" step="5" min="0" max="1000">
               </label>
-              <label>Water-gas ratio <span class="u">STB/MMscf</span>
+              <label title="Water-gas ratio of the test">WGR <span class="u">STB/MMscf</span>
                 <input type="number" id="vc_wgr" value="0" step="1" min="0" max="1000">
               </label>
             </div>
           </div>
           <div class="row">
-            <label>Gas lift gas rate <span class="u" data-unit="gasRate"></span>
+            <label title="Gas lift rate during the test">Lift gas <span class="u" data-unit="gasRate"></span>
               <input type="number" id="vc_gl_rate" value="1000" step="100" min="0">
             </label>
-            <label>Depth of injection <span class="u" data-unit="length"></span>
+            <label title="Injection depth during the test">Inj. depth <span class="u" data-unit="length"></span>
               <input type="number" id="vc_gl_md" value="6000" step="100" min="100">
             </label>
           </div>
@@ -853,6 +867,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=cf4b8b4"></script>
+<script type="module" src="app.js?v=6a37fee"></script>
 </body>
 </html>

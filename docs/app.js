@@ -18,6 +18,7 @@ import * as wellmod from "./well.js";
 import * as nodal from "./nodal.js";
 import * as units from "./units.js";
 import * as advice from "./advice.js";
+import * as wellview from "./wellview.js";
 
 // One place for the chart colours, so a pressure line is the same colour wherever it is drawn.
 const IPR_COLOUR = "#1f77b4";     // the inflow curve, and the pressure down the well
@@ -533,13 +534,38 @@ function message(where, html, kind = "") {
   if (node) node.innerHTML = html ? `<p class="note ${kind}">${html}</p>` : "";
 }
 
-/** @param {{key: string, value: string}[]} items */
+/**
+ * The telemetry beside the well: the few numbers that say what this well is doing.
+ * @param {{key: string, value: string}[]} items
+ */
 function drawResults(items) {
   const list = document.getElementById("results");
   if (!list) return;
   list.innerHTML = items
     .map((it) => `<li><span class="k">${it.key}</span><span class="v">${it.value}</span></li>`)
     .join("");
+}
+
+/**
+ * The numbers that belong to the inflow model rather than to the well - the bubble point, the PI
+ * the rock gives, Z and the gas viscosity, how long the transient solution lasts.  They sit under
+ * the charts, out of the way of the telemetry.
+ * @param {{key: string, value: string}[]} items
+ */
+function drawExtras(items) {
+  const list = document.getElementById("extras");
+  if (!list) return;
+  list.innerHTML = items
+    .map((it) => `<li><span class="k">${it.key}</span><span class="v">${it.value}</span></li>`)
+    .join("");
+}
+
+/** One line under the telemetry saying what the well is doing. @param {string} text @param {boolean} [shut] */
+function wellState(text, shut = false) {
+  const node = document.getElementById("well-state");
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle("shut", shut);
 }
 
 /** @param {string} id */
@@ -620,9 +646,10 @@ function recalculate() {
   } catch (error) {
     lastCase = null;
     drawResults([]);
+    drawExtras([]);
+    wellState("");
     clearChart("chart-nodal");
     clearChart("chart-profile");
-    clearFlowPattern();
     drawTable([], [], "", "");
     message("messages", /** @type {Error} */ (error).message, "error");
     return;
@@ -633,6 +660,8 @@ function recalculate() {
     curve = ipr.ipr_curve(c.ipr_name, c.p_res, CURVE_POINTS, c.ipr_inputs);
   } catch (error) {
     drawResults([]);
+    drawExtras([]);
+    wellState("");
     clearChart("chart-nodal");
     drawTable([], [], "", "");
     message("messages", /** @type {Error} */ (error).message, "error");
@@ -649,8 +678,10 @@ function recalculate() {
     { key: `AOF (${rateLabel})`, value: show(aof, 0) },
     { key: `Reservoir pressure (${pressureLabel})`,
       value: show(units.fromEngine("pressure", c.p_res), 0) },
-    ...c.extra,
   ]);
+  drawExtras(c.extra);
+  wellState("The inflow only. Press Calculate for the tubing, the operating point and the flow.");
+  drawWell(c, null, 0);
   drawTable(pwfShown, qShown, rateLabel, pressureLabel);
   plot("chart-nodal", [{
     x: qShown, y: pwfShown, mode: "lines", name: "IPR",
@@ -662,7 +693,6 @@ function recalculate() {
              range: [0, Math.max(...pwfShown) * 1.02] },
   });
   clearChart("chart-profile");
-  clearFlowPattern();
   const note = document.getElementById("profile-note");
   if (note) note.textContent = "";
   const warnings = ipr.takeWarnings();
@@ -737,7 +767,8 @@ function runNodal() {
   }
   items.push({ key: `AOF (${rateLabel})`, value: show(toRate(res.aof), 0) });
   items.push({ key: `Reservoir pressure (${pressureLabel})`, value: show(toP(c.p_res), 0) });
-  drawResults([...items, ...c.extra]);
+  drawResults(items);
+  drawExtras(c.extra);
 
   const allP = [...cv.ipr_pwf.map(toP), ...cv.vlp_pwf.map(toP)];
   plot("chart-nodal", traces, {
@@ -750,8 +781,10 @@ function runNodal() {
   const note = document.getElementById("profile-note");
   if (!res.found) {
     clearChart("chart-profile");
-    clearFlowPattern();
     if (note) note.textContent = "";
+    drawWell(c, null, 0);
+    wellState("The well will not flow: the tubing needs more pressure than the reservoir can give "
+              + "at any rate.", true);
     message("messages", res.message, "warn");
     return;
   }
@@ -763,21 +796,30 @@ function runNodal() {
                                    c.correlation, c.max_step_ft, c.gravity_mult, c.friction_mult);
   drawProfile(tr, c);
 
-  // the pattern drawing: the chosen correlation's own pattern when it has one, otherwise the best
-  // suited of the five that do, run on the same well at the same rate
-  const patternFrom = patternCorrelationFor(adviceInputs(), c.correlation);
-  const borrowed = patternFrom !== c.correlation;
+  // the flow-pattern tint: the chosen correlation's own pattern when it works one out, otherwise
+  // the best suited of the five that do, run on the same well at the same rate
+  let patternFrom = patternCorrelationFor(adviceInputs(), c.correlation);
+  let borrowed = patternFrom !== c.correlation;
   let patternTr = tr;
   if (borrowed) {
     try {
       patternTr = vlp.pressure_traverse(c.well, fluidAt, /** @type {number} */ (res.q), c.p_wh,
                                         patternFrom, c.max_step_ft, c.gravity_mult, c.friction_mult);
     } catch {
-      patternTr = tr;                 // it would not run: fall back to the blank drawing
-      drawFlowPattern(tr, c, c.correlation, false);
+      patternTr = tr;                 // it would not run: show the chosen correlation's own output
+      patternFrom = c.correlation;
+      borrowed = false;
     }
   }
-  if (patternTr !== tr || !borrowed) drawFlowPattern(patternTr, c, patternFrom, borrowed);
+  drawWell(c, patternTr, /** @type {number} */ (res.q), patternFrom, borrowed);
+  const drawdown = show(units.fromEngine("pressureDiff",
+                                         c.p_res - /** @type {number} */ (res.pwf)), 0);
+  wellState(c.gas_lift
+    ? `Flowing on gas lift: ${show(units.fromEngine("gasRate", c.gas_lift.rate), 0)} `
+      + `${units.unitOf("gasRate")} injected at `
+      + `${show(units.fromEngine("length", c.gas_lift.md), 0)} ${units.unitOf("length")}. `
+      + `Drawdown ${drawdown} ${units.unitOf("pressureDiff")}.`
+    : `Flowing naturally. Drawdown ${drawdown} ${units.unitOf("pressureDiff")}.`);
 
   const lengthLabel = units.unitOf("length");
   const tempLabel = units.unitOf("temperature");
@@ -890,78 +932,22 @@ function drawProfile(tr, c) {
 }
 
 // ---------------------------------------------------------------------
-// The flow pattern down the tubing
+// The live well: the schematic beside the charts
 // ---------------------------------------------------------------------
-// The correlation reports a flow pattern for every step of the traverse, and it is the most useful
-// thing it says that a chart of pressure cannot show: whether the well is bubbling, slugging or
-// flowing as a mist, and at what depth it changes.  The drawing is the tubing from wellhead to
-// perforations with each step coloured by its pattern, and bubbles or a film drawn inside it, so the
-// picture says what the pattern IS rather than only naming it.
-//
-// The names differ between correlations - Beggs and Brill has "distributed", "intermittent" and
-// "segregated"; Ansari has "bubble", "slug" and "annular"; Duns and Ros has regions - so every name
-// is mapped to one of five families below, and the legend shows only the ones this well actually has.
+// The drawing is wellview.js, which both knows nothing about this page and is the only thing that
+// draws a well, so the picture cannot disagree with the calculation beside it.  This part works out
+// where the packer, the shoe, the perforations and the gas lift valve go for the well that has been
+// entered, and hands the traverse over so the fluid moves at the rate the engine found.
 
-/**
- * Each flow pattern family: its colour, the name shown, and what it looks like.
- * The order is the physical one, liquid-rich at the top of the list to gas-rich at the bottom.
- * @type {Record<string, {colour: string, label: string, draw: string}>}
- */
-const FLOW_FAMILIES = {
-  liquid: { colour: "#1f5c8b", label: "Liquid only", draw: "full" },
-  bubble: { colour: "#4e9ed4", label: "Bubble", draw: "bubbles" },
-  slug: { colour: "#8bc34a", label: "Slug / intermittent", draw: "slugs" },
-  churn: { colour: "#f5a623", label: "Churn / transition", draw: "churn" },
-  annular: { colour: "#d0686a", label: "Annular / mist", draw: "film" },
-  gas: { colour: "#b9b9b9", label: "Gas only", draw: "empty" },
-  // Some correlations never work out a flow pattern: Hagedorn and Brown has one holdup correlation
-  // for everything (with Griffith's bubble correction underneath it), Gray assumes the gas is
-  // continuous without saying which pattern that is, and Fancher and Brown ignores slip altogether.
-  // Those stretches are drawn blank and labelled as what they are.  Guessing a pattern for them
-  // would be the drawing claiming something the calculation never said.
-  none: { colour: "#ccd5dc", label: "Not identified by this correlation", draw: "" },
-};
-
-// The ones that do identify a pattern, named in the note under the legend so it is clear why some
-// correlations fill the drawing and others do not.
+// The five correlations that work out a flow pattern.  The other three say so instead of guessing,
+// and the drawing borrows a pattern from the best suited of these for the same well.
 const PATTERN_CORRELATIONS = ["beggs_brill", "orkiszewski", "duns_ros", "ansari", "mukherjee_brill"];
 
 /**
- * Which family a correlation's own pattern name belongs to.  A name this does not know is drawn in
- * grey and shown under its own name, so a new correlation cannot silently be mislabelled.
- * @type {Record<string, string>}
- */
-const FLOW_FAMILY_OF = {
-  // the single-phase ends, reported by every correlation
-  liquid: "liquid", gas: "gas",
-  // Ansari, Orkiszewski, Duns and Ros, Mukherjee and Brill
-  bubble: "bubble", dispersed: "bubble", "dispersed bubble": "bubble",
-  slug: "slug", plug: "slug", "slug/churn": "churn", churn: "churn",
-  transition: "churn", froth: "churn",
-  annular: "annular", mist: "annular", "annular/mist": "annular", "annular mist": "annular",
-  stratified: "slug",
-  // Beggs and Brill's four names
-  segregated: "annular", intermittent: "slug", distributed: "bubble",
-  // Hagedorn and Brown reports its own name when its own holdup is used, and Griffith's bubble
-  // correction when that takes over - that one IS bubble flow, which is what Griffith's correlation
-  // is for.  Gray and Fancher and Brown identify nothing.
-  hagedorn: "none", griffith: "bubble", gray: "none", "no-slip": "none",
-  // Duns and Ros numbers its regions
-  "region 1": "bubble", "region 2": "slug", "region 3": "annular",
-};
-
-/**
- * Which correlation the flow-pattern drawing should come from.
- *
- * Three of the eight work out no pattern at all, and one of them - Hagedorn and Brown - is what the
- * app suggests for a great many wells, so the drawing would usually be blank.  Instead, when the
- * chosen correlation identifies nothing, the pattern is borrowed from the best-suited correlation
- * that DOES identify one, judged for this same well by the same rules that pick the correlation in
- * the first place.
- *
- * Only the pattern is borrowed.  Every pressure on the page still comes from the correlation the
- * user chose, and the caption under the drawing says which correlation the pattern came from, so the
- * two are never confused.
+ * Which correlation the flow-pattern tint should come from: the chosen one when it works out a
+ * pattern, otherwise the best suited of the five that do, judged for this same well by the same
+ * rules that pick the correlation in the first place.  Only the pattern is borrowed; every pressure
+ * stays the chosen correlation's.
  * @param {import("./advice.js").AdviceInputs} inputs @param {string} chosen
  */
 function patternCorrelationFor(inputs, chosen) {
@@ -983,148 +969,98 @@ function patternCorrelationFor(inputs, chosen) {
   return best || "beggs_brill";
 }
 
-/** The family of one reported pattern name. @param {string} name */
-function flowFamily(name) {
-  const key = String(name || "").toLowerCase().trim();
-  return FLOW_FAMILY_OF[key] || "";
+/**
+ * Where the completion sits in this well.
+ *
+ * The perforated interval is the net thickness when the inflow model asks for one (the Darcy and
+ * Jones models do), and a sensible fraction of the depth otherwise.  The packer goes ABOVE the top
+ * of the perforations, which is where a packer goes: it seals the annulus off above the producing
+ * interval.  The tubing ends in an open shoe just below it, so the fluid that enters through the
+ * perforations rises inside the casing and turns into the open end of the tubing.
+ * @param {Case} c
+ */
+function completionDepths(c) {
+  const perf_md = c.perf_md;
+  const h = Number(c.ipr_inputs.h);
+  const interval = Math.min(Math.max(Number.isFinite(h) && h > 0 ? h : 0.03 * perf_md,
+                                     Math.min(50, perf_md * 0.02)),
+                            perf_md * 0.2);
+  const perf_top = Math.max(perf_md - interval, perf_md * 0.6);
+  // a packer is usually set a hundred feet or two above the top of the perforations, and the tubing
+  // shoe a short way below it
+  const gap = Math.max(150, 0.02 * perf_md);
+  const packer_md = Math.max(perf_top - gap, perf_md * 0.4);
+  const shoe_md = Math.min(packer_md + Math.max(40, 0.006 * perf_md), perf_top - 10);
+  return { perf_top, packer_md, shoe_md };
 }
+
+/** @type {{view: any, player: any} | null} */
+let wellView = null;
 
 /**
- * Draw the tubing coloured by flow pattern.
- * @param {any} tr the traverse whose regime[] and md[] are drawn
- * @param {Case} c
- * @param {string} from the correlation this pattern came from
- * @param {boolean} borrowed whether that is a different correlation from the one being used
+ * Draw the well, and set the fluid moving at the rate that was found.
+ * @param {Case} c @param {any} tr the traverse, or null when nothing has been solved yet
+ * @param {number} rate STB/d or Mscf/d, 0 when the well is not flowing
+ * @param {string} patternFrom which correlation the pattern tint came from
+ * @param {boolean} borrowed whether that is a different correlation from the one in use
  */
-function drawFlowPattern(tr, c, from, borrowed) {
-  const svg = document.getElementById("flow-svg");
-  const legend = document.getElementById("flow-legend");
+function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
+  const svg = /** @type {any} */ (document.getElementById("flow-svg"));
   if (!svg) return;
+  const { perf_top, packer_md, shoe_md } = completionDepths(c);
+  const oil = /** @type {vlp.OilWaterFluid} */ (c.fluid);
+  const isOil = c.fluid_type === "oil";
 
-  const W = 150;
-  const H = 420;
-  const top = 26;
-  const bottom = H - 18;
-  const x0 = 46;                      // the tubing, left edge
-  const x1 = 100;                     // and right edge
-  const perf_md = tr.md[tr.md.length - 1];
-  const y = (/** @type {number} */ md) => top + (bottom - top) * md / perf_md;
-
-  const lengthLabel = units.unitOf("length");
-  const shown = (/** @type {number} */ ft) => show(units.fromEngine("length", ft), 0);
-
-  /** @type {string[]} */
-  const parts = [];
-  /** @type {Set<string>} */
-  const used = new Set();
-  /** @type {Record<string, string>} */
-  const unknown = {};
-
-  // one block per step, and the pattern drawn inside it
-  for (let i = 0; i < tr.regime.length; i++) {
-    const name = tr.regime[i];
-    const family = flowFamily(name);
-    if (family) used.add(family);
-    else unknown[name] = name;
-    const colour = family ? FLOW_FAMILIES[family].colour : "#9e9e9e";
-    const yTop = y(tr.md[i]);
-    const yBot = y(tr.md[i + 1]);
-    const h = Math.max(yBot - yTop, 0.4);
-    parts.push(`<rect x="${x0}" y="${yTop.toFixed(2)}" width="${x1 - x0}" height="${h.toFixed(2)}" `
-      + `fill="${colour}" fill-opacity="0.9"><title>${escapeHtml(String(name))} at `
-      + `${shown(tr.md[i])}-${shown(tr.md[i + 1])} ${lengthLabel} MD</title></rect>`);
+  // how fast the fluid should move on screen: from the real mixture velocity in the tubing
+  let speed = 0;
+  if (rate > 0) {
+    const area = Math.PI * (num("tubing_id") / 12) ** 2 / 4;
+    const ftPerS = isOil ? rate * 5.615 / 86400 / area : rate * 1000 / 86400 / area;
+    speed = Math.min(Math.max(ftPerS * 22, 10), 220);
   }
 
-  // the texture: bubbles, slugs or a film, drawn over the colour every 14 pixels so the picture shows
-  // what the pattern is and not only that it changed
-  for (let yy = top + 7; yy < bottom; yy += 14) {
-    const mdHere = perf_md * (yy - top) / (bottom - top);
-    let i = 0;
-    while (i < tr.regime.length - 1 && tr.md[i + 1] < mdHere) i += 1;
-    const family = flowFamily(tr.regime[i]);
-    const draw = family ? FLOW_FAMILIES[family].draw : "";
-    const mid = (x0 + x1) / 2;
-    if (draw === "bubbles") {
-      for (const dx of [-16, -6, 5, 15]) {
-        parts.push(`<circle cx="${mid + dx}" cy="${yy + (dx % 7)}" r="2.1" fill="#fff" fill-opacity="0.75"/>`);
-      }
-    } else if (draw === "slugs") {
-      // a long gas bubble with liquid either side of it
-      parts.push(`<ellipse cx="${mid}" cy="${yy}" rx="15" ry="4.6" fill="#fff" fill-opacity="0.8"/>`);
-    } else if (draw === "churn") {
-      parts.push(`<path d="M${x0 + 5},${yy} q 10,-5 20,0 t 20,0" stroke="#fff" stroke-opacity="0.8" `
-        + `stroke-width="1.6" fill="none"/>`);
-    } else if (draw === "film") {
-      // liquid on the wall, gas with droplets up the middle
-      parts.push(`<rect x="${x0}" y="${yy - 7}" width="4" height="14" fill="#fff" fill-opacity="0.65"/>`);
-      parts.push(`<rect x="${x1 - 4}" y="${yy - 7}" width="4" height="14" fill="#fff" fill-opacity="0.65"/>`);
-      parts.push(`<circle cx="${mid - 5}" cy="${yy}" r="1.3" fill="#fff" fill-opacity="0.85"/>`);
-      parts.push(`<circle cx="${mid + 6}" cy="${yy + 4}" r="1.1" fill="#fff" fill-opacity="0.85"/>`);
-    } else if (draw === "full") {
-      parts.push(`<line x1="${x0 + 6}" y1="${yy}" x2="${x1 - 6}" y2="${yy}" stroke="#fff" `
-        + `stroke-opacity="0.35" stroke-width="1"/>`);
-    }
-  }
+  /** @type {import("./wellview.js").WellSpec} */
+  const spec = {
+    md: c.well.md, tvd: c.well.tvd, tubing_id: num("tubing_id"),
+    perf_top, packer_md, shoe_md,
+    gl_md: c.gas_lift ? c.gas_lift.md : null,
+    water_cut: isOil ? oil.water_cut : 0.35,
+    gor: isOil ? oil.producingGor() : 6000,
+    flowing: rate > 0,
+    speed,
+    lengthUnit: units.unitOf("length"),
+    toShown: (ft) => units.fromEngine("length", ft),
+    pattern: tr ? { md: tr.md, regime: tr.regime } : null,
+    tree: true,
+  };
+  const view = wellview.render(svg, spec);
+  if (wellView) wellView.player.replace(view);
+  else wellView = { view, player: wellview.animate(view) };
+  wellView.view = view;
 
-  // the tubing wall, the wellhead and the perforations
-  parts.push(`<rect x="${x0}" y="${top}" width="${x1 - x0}" height="${bottom - top}" `
-    + `fill="none" stroke="#5a6b7c" stroke-width="1.2"/>`);
-  parts.push(`<line x1="20" y1="${top}" x2="${W - 10}" y2="${top}" stroke="#d9e1e8" stroke-width="1"/>`);
-  parts.push(`<text x="20" y="${top - 8}" font-size="9" fill="#5a6b7c">wellhead</text>`);
-  parts.push(`<line x1="${x0 - 6}" y1="${bottom}" x2="${x1 + 6}" y2="${bottom}" stroke="#d1242f" stroke-width="2"/>`);
-  parts.push(`<text x="20" y="${bottom + 13}" font-size="9" fill="#5a6b7c">perforations</text>`);
-
-  // a depth scale down the left, at the depths where the pattern changes plus the two ends
-  /** @type {number[]} */
-  const marks = [0];
-  for (let i = 1; i < tr.regime.length; i++) {
-    if (flowFamily(tr.regime[i]) !== flowFamily(tr.regime[i - 1])) marks.push(tr.md[i]);
-  }
-  marks.push(perf_md);
-  let lastY = -99;
-  for (const md of marks) {
-    const yy = y(md);
-    if (yy - lastY < 13) continue;              // no overlapping labels
-    lastY = yy;
-    parts.push(`<line x1="${x0 - 4}" y1="${yy.toFixed(1)}" x2="${x0}" y2="${yy.toFixed(1)}" `
-      + `stroke="#5a6b7c" stroke-width="0.8"/>`);
-    parts.push(`<text x="${x0 - 6}" y="${(yy + 3).toFixed(1)}" font-size="8.5" fill="#5a6b7c" `
-      + `text-anchor="end">${shown(md)}</text>`);
-  }
-  parts.push(`<text x="4" y="${top - 8}" font-size="8.5" fill="#5a6b7c">MD, ${lengthLabel}</text>`);
-
-  svg.innerHTML = parts.join("");
-
-  // the legend: only the patterns this well has, in the physical order, plus any name not recognised
-  if (legend) {
-    const rows = Object.keys(FLOW_FAMILIES)
-      .filter((f) => used.has(f))
-      .map((f) => `<span><i style="background:${FLOW_FAMILIES[f].colour}"></i>${FLOW_FAMILIES[f].label}</span>`);
-    for (const name of Object.keys(unknown)) {
-      rows.push(`<span><i style="background:#9e9e9e"></i>${escapeHtml(name)}</span>`);
-    }
-    let html = rows.join("");
-    if (borrowed) {
-      html += `<span class="flow-note">${advice.nameOf(c.correlation)}, which is the correlation in `
-        + `use, works out no flow pattern. This pattern is from <b>${advice.nameOf(from)}</b>, the `
-        + `best suited of the five that do (${PATTERN_CORRELATIONS.map((k) => advice.nameOf(k)).join(", ")}), `
-        + `run on the same well at the same rate. Every pressure on this page is still `
-        + `${advice.nameOf(c.correlation)}'s.</span>`;
-    } else if (used.has("none")) {
-      html += `<span class="flow-note">${advice.nameOf(from)} works out no flow pattern here, and `
-        + `no other correlation could be run for one, so this part is left blank rather than `
-        + `guessed.</span>`;
-    }
-    legend.innerHTML = html;
-  }
-}
-
-/** Empty the flow drawing. */
-function clearFlowPattern() {
-  const svg = document.getElementById("flow-svg");
+  // the legend: the patterns this well has, and where they came from
   const legend = document.getElementById("flow-legend");
-  if (svg) svg.innerHTML = "";
-  if (legend) legend.innerHTML = "";
+  if (legend) {
+    if (!tr) {
+      legend.innerHTML = "";
+    } else {
+      const rows = Object.keys(wellview.FLOW_FAMILIES)
+        .filter((f) => view.families.has(f))
+        .map((f) => `<span><i style="background:${wellview.FLOW_FAMILIES[f].colour}"></i>`
+                    + `${wellview.FLOW_FAMILIES[f].label}</span>`);
+      let html = rows.join("");
+      if (borrowed) {
+        html += `<span class="flow-note">The tubing is tinted by flow pattern. `
+          + `${advice.nameOf(c.correlation)}, the correlation in use, works out none, so this is `
+          + `<b>${advice.nameOf(patternFrom)}</b>'s pattern for the same well at the same rate. `
+          + `Every pressure here is still ${advice.nameOf(c.correlation)}'s.</span>`;
+      } else if (rows.length) {
+        html += `<span class="flow-note">The tubing is tinted by the flow pattern `
+          + `${advice.nameOf(patternFrom)} works out at each depth.</span>`;
+      }
+      legend.innerHTML = html;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------
