@@ -133,6 +133,82 @@ def cases():
                                     10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
                                     random.uniform(1.0, 70.0))]))
 
+    # ---- Orkiszewski: each piece and every flow pattern ---------------
+    for rho_l in (45.0, 62.4):
+        for mu_l in (0.3, 2.0, 50.0):
+            for d_ft in (0.1, 0.2035, 0.2493, 0.5):
+                for v_t in (0.2, 2.0, 9.9, 10.0, 10.1, 40.0, 150.0):
+                    out.append(("ork_bubble_rise_velocity", "ork_bubble_rise_velocity",
+                                [rho_l, mu_l, d_ft, v_t]))
+                    for wc in (True, False):
+                        out.append(("ork_gamma", "ork_gamma", [mu_l, d_ft, v_t, wc]))
+    for v_sl in (0.01, 0.3, 3.0, 20.0):
+        for v_sg in (0.001, 0.2, 3.0, 30.0, 200.0):
+            for d_ft in (0.1, 0.2493, 0.5):
+                out.append(("ork_flow_regime", "ork_flow_regime",
+                            [v_sl, v_sg, 52.0, 20.0 * 0.0022046, d_ft]))
+    # the whole gradient: the velocities walk through bubble, slug, transition and mist,
+    # and frac_w switches the continuous liquid phase for Gamma
+    for frac_w in (0.0, 0.3, 0.5, 0.9):
+        for v_sl in (0.0, 1e-9, 0.002, 0.08, 0.8, 5.0, 25.0):
+            for v_sg in (0.0, 1e-9, 0.03, 0.5, 5.0, 50.0, 250.0):
+                if v_sl + v_sg <= 0:
+                    continue
+                for angle in (90.0, 45.0, 0.0):
+                    out.append(("orkiszewski_gradient", "orkiszewski_gradient",
+                                [1200.0, angle, 2.441, 0.0006,
+                                 conditions(v_sl, v_sg, frac_w=frac_w)]))
+    for _ in range(2000):
+        out.append(("orkiszewski_gradient_random", "orkiszewski_gradient",
+                    [10 ** random.uniform(1.3, 4.0),
+                     random.uniform(-90.0, 90.0),
+                     random.uniform(1.0, 7.0),
+                     random.choice([0.0, 0.0006, 0.002]),
+                     conditions(10 ** random.uniform(-4, 1.4), 10 ** random.uniform(-4, 2.3),
+                                random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                random.uniform(1.0, 70.0), random.choice([0.0, 0.4, 0.6, 1.0]))]))
+
+    # ---- Duns and Ros: the chart tables, the slip laws and the regions -
+    for n_l in (0.001, 0.002, 0.0035, 0.02, 0.0529, 0.2399, 0.8453, 1.8, 3.0):
+        for n in (0.0, 0.5, 5.0, 50.0):
+            for rn in (0.1, 5.0, 60.0, 400.0):
+                for n_d in (10.0, 50.0, 102.6, 260.0, 500.0):
+                    out.append(("dr_slip_region1", "dr_slip_region1", [n, rn, n_d, n_l]))
+                    out.append(("dr_slip_region2", "dr_slip_region2", [n, rn, n_d, n_l]))
+    for n in (0.0, 0.1, 1.0, 10.0, 100.0):
+        out.append(("dr_region_limits", "dr_region_limits", [n]))
+    for v_sl in (0.01, 0.5, 4.0, 30.0):
+        for v_sg in (0.005, 0.3, 4.0, 40.0, 300.0):
+            for d_ft in (0.1, 0.2493, 0.6):
+                out.append(("dr_numbers", "dr_numbers", [v_sl, v_sg, 52.0, 20.0, 1.2, d_ft]))
+                out.append(("dr_flow_region", "dr_flow_region", [v_sl, v_sg, 52.0, 20.0, 1.2, d_ft]))
+            for s_ in (-2.0, 0.0, 0.5, 5.0, 50.0):
+                out.append(("dr_holdup", "dr_holdup", [v_sl, v_sg, s_, 4.0]))
+    for v_sg in (0.5, 5.0, 60.0, 400.0):
+        for mu_l in (0.2, 2.0, 60.0):
+            for rho_g in (0.4, 3.0, 15.0):
+                out.append(("dr_mist_film_roughness", "dr_mist_film_roughness",
+                            [v_sg, rho_g, 52.0, mu_l, 20.0, 0.2493, 0.00025]))
+    # the whole gradient: across all three regions and the transition between II and III
+    for v_sl in (0.0, 1e-9, 0.003, 0.1, 1.0, 6.0, 30.0):
+        for v_sg in (0.0, 1e-9, 0.04, 0.6, 6.0, 60.0, 300.0):
+            if v_sl + v_sg <= 0:
+                continue
+            for angle in (90.0, 50.0, 0.0, -60.0):
+                out.append(("duns_ros_gradient", "duns_ros_gradient",
+                            [1200.0, angle, 2.441, 0.0006, conditions(v_sl, v_sg)]))
+    for _ in range(2000):
+        out.append(("duns_ros_gradient_random", "duns_ros_gradient",
+                    [10 ** random.uniform(1.3, 4.0),
+                     random.uniform(-90.0, 90.0),
+                     random.uniform(1.0, 7.0),
+                     random.choice([0.0, 0.0006, 0.002, 0.06]),      # 0.06 exercises Eq. 15
+                     conditions(10 ** random.uniform(-4, 1.4), 10 ** random.uniform(-4, 2.3),
+                                random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                random.uniform(1.0, 70.0))]))
+
     # ---- Gray's two pieces on their own ------------------------------
     for r in (1e-6, 0.001, 0.0069, 0.007, 0.0071, 0.05, 0.5, 5.0, 100.0):
         for n_v in (0.01, 1.0, 100.0, 1e4):

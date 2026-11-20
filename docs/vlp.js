@@ -4,9 +4,9 @@
  *
  * Being written in stages, each one cross-checked against the Python before the next begins.
  * Done so far: the friction factor, surface tension, Beggs and Brill (1973),
- * Hagedorn and Brown (1965) and Gray (1974).
- * Still to come: Orkiszewski, Ansari, Duns and Ros, Mukherjee and Brill,
- * Fancher and Brown, the fluids and the pressure traverse.
+ * Hagedorn and Brown (1965), Gray (1974), Orkiszewski (1967) and Duns and Ros (1963).
+ * Still to come: Ansari, Mukherjee and Brill, Fancher and Brown, the fluids and the
+ * pressure traverse.
  *
  * Every function keeps the same name and the same argument order as the Python, so
  * tools/crosscheck.mjs can call both with one list of numbers.
@@ -531,4 +531,514 @@ export function gray_gradient(p, angle_deg, d_in, roughness_in, c) {
   const e_k = Math.min(rho_s * v_m * v_sg / (GC * p * 144.0), 0.95);
   const dpdl = (hydrostatic + friction) / (1.0 - e_k);
   return { dpdl, hl, regime, hydrostatic, friction, f_tp: f, re, e_k, k_eff };
+}
+
+
+// =====================================================================
+// Orkiszewski (1967, SPE 1546) - vertical oil wells and gas lift wells
+// =====================================================================
+// A composite of earlier work (the paper's Appendices A-C):
+//   * the flow pattern (bubble, slug, transition, mist) comes from the gas fraction and a
+//     dimensionless gas velocity v_gD (Griffith-Wallis for bubble/slug, Duns-Ros for the others);
+//   * bubble flow  : Griffith - a constant slip velocity of 0.8 ft/s;
+//   * slug flow    : modified Griffith-Wallis - the gas bubbles rise at a velocity v_b, and a
+//                    "liquid distribution coefficient" Gamma (from field data) accounts for the
+//                    liquid film and the droplets in the bubbles.  This is the pattern met in most
+//                    flowing and gas lift wells;
+//   * mist flow    : Duns-Ros - no slip; the wall roughness seen by the gas is set by the liquid film;
+//   * transition   : the slug and mist results weighted linearly with v_gD (Duns-Ros).
+// The gradient is  dp/dL = (density * sin(angle) + wall friction) / (1 - kinetic term), Eq. A-3.
+//
+// Notes on how the paper is coded (the same decisions as the Python, kept word for word):
+//   * Bubble rise velocity v_b uses the paper's own equations C-7, C-8 and C-9 for every Reynolds
+//     number (the paper reads C1 and C2 from Figs. 8 and 9 only where those charts reach, up to a
+//     Reynolds number of about 6000; the equations are what its Appendix D example uses).
+//     Equation C-9 is written here as 1/2 (v_bi + sqrt(...)); the printed bracket is missing, but
+//     only this form joins Eq. C-7 at N_b = 3000 and Eq. C-8 at N_b = 8000.
+//   * Equation B-4 prints v_g where v_gD is meant (the Duns-Ros mist boundary).
+//   * The constraints C-15 and C-16 on Gamma are applied as written; C-16 contains the average
+//     density, which itself contains Gamma, so the inequality is solved for Gamma instead of being
+//     iterated.
+//   * Which liquid is the continuous phase (needed for Gamma) is not defined in the paper: water
+//     when it is at least half of the liquid volume, oil otherwise.
+//   * The Moody friction factor is the Colebrook equation (the paper reads a chart).
+
+export const ORK_SLIP_VELOCITY = 0.8;        // Griffith bubble-flow slip velocity, ft/s
+export const ORK_WATER_CONTINUOUS = 0.5;     // water is the continuous phase from this water fraction
+
+/**
+ * Bubble rise velocity v_b (ft/s) in slug flow, Eq. C-5 through C-9 of the paper.
+ * N_Re = 1488 rho_L d v_t / mu_L (C-6) and the bubble Reynolds number N_b = 1488 v_b d rho_L / mu_L.
+ * Because N_b depends on v_b, the equation that applies is chosen as follows:
+ *   C-7 if the velocity it gives has N_b <= 3000, otherwise
+ *   C-8 if the velocity it gives has N_b >= 8000, otherwise
+ *   C-9 (the equation for 3000 < N_b < 8000).
+ * @param {number} rho_l @param {number} mu_l @param {number} d_ft @param {number} v_t
+ */
+export function ork_bubble_rise_velocity(rho_l, mu_l, d_ft, v_t) {
+  const n_re = RE_CONST * rho_l * d_ft * v_t / mu_l;
+  const root = Math.sqrt(GC * d_ft);
+  /** @param {number} v_b */
+  const n_b = (v_b) => RE_CONST * v_b * d_ft * rho_l / mu_l;
+  const v_7 = (0.546 + 8.74e-6 * n_re) * root;
+  if (n_b(v_7) <= 3000.0) return v_7;
+  const v_8 = (0.35 + 8.74e-6 * n_re) * root;
+  if (n_b(v_8) >= 8000.0) return v_8;
+  const v_bi = (0.251 + 8.74e-6 * n_re) * root;
+  return 0.5 * (v_bi + Math.sqrt(v_bi ** 2 + 13.59 * mu_l / (rho_l * Math.sqrt(d_ft))));
+}
+
+/**
+ * Liquid distribution coefficient Gamma before the limits C-15 and C-16 (Eq. C-11 to C-14).
+ * mu_l in cP, d_ft = hydraulic diameter in ft, v_t = total velocity in ft/s; logarithms are base 10.
+ * @param {number} mu_l @param {number} d_ft @param {number} v_t @param {boolean} water_continuous
+ */
+export function ork_gamma(mu_l, d_ft, v_t, water_continuous) {
+  const lg = Math.log10;
+  if (water_continuous) {
+    if (v_t < 10.0) {
+      return 0.013 * lg(mu_l) / d_ft ** 1.38 - 0.681 + 0.232 * lg(v_t) - 0.428 * lg(d_ft);          // C-11
+    }
+    return 0.045 * lg(mu_l) / d_ft ** 0.799 - 0.709 - 0.162 * lg(v_t) - 0.888 * lg(d_ft);           // C-12
+  }
+  if (v_t < 10.0) {
+    return 0.0127 * lg(mu_l + 1.0) / d_ft ** 1.415 - 0.284 + 0.167 * lg(v_t) + 0.113 * lg(d_ft);    // C-13
+  }
+  return (0.0274 * lg(mu_l + 1.0) / d_ft ** 1.371 + 0.161 + 0.569 * lg(d_ft)
+          - lg(v_t) * (0.01 * lg(mu_l + 1.0) / d_ft ** 1.571 + 0.397 + 0.63 * lg(d_ft)));           // C-14
+}
+
+/**
+ * Bubble flow: [average density, friction gradient in lbf/ft2/ft, extra results].
+ * @returns {[number, number, {f: number, re: number}]}
+ */
+function orkBubble(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d) {
+  const x = 1.0 + v_t / ORK_SLIP_VELOCITY;
+  const f_g = 0.5 * (x - Math.sqrt(Math.max(x * x - 4.0 * v_sg / ORK_SLIP_VELOCITY, 0.0)));   // gas fraction, Eq. C-1
+  const rho = (1.0 - f_g) * rho_l + f_g * rho_g;                                             // Eq. C-2
+  const v_l = v_sl / (1.0 - f_g);
+  const re = RE_CONST * rho_l * d_ft * v_l / mu_l;
+  const f = friction_factor(re, eps_d);
+  const tau = f * rho_l * v_l ** 2 / (2.0 * GC * d_ft);                                      // Eq. C-3
+  return [rho, tau, { f, re }];
+}
+
+/**
+ * Slug flow: [average density, friction gradient in lbf/ft2/ft, extra results].
+ * @returns {[number, number, {f: number, re: number, v_b: number, gamma: number}]}
+ */
+function orkSlug(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d, water_continuous) {
+  const v_b = ork_bubble_rise_velocity(rho_l, mu_l, d_ft, v_t);
+  let gamma = ork_gamma(mu_l, d_ft, v_t, water_continuous);
+  const rho_0 = (rho_l * v_sl + rho_g * v_sg + rho_l * v_b) / (v_t + v_b);    // Eq. C-4 without the Gamma term
+  const share = v_b / (v_t + v_b);                                            // v_b Ap / (q_t + v_b Ap)
+  gamma = Math.max(gamma, -0.065 * v_t);                                      // C-15
+  if (v_t > 10.0) {    // C-16:  Gamma >= -share (1 - rho/rho_L), rho = rho_0 + Gamma rho_L
+    gamma = Math.max(gamma, -share * (1.0 - rho_0 / rho_l) / (1.0 - share));
+  }
+  const rho = rho_0 + gamma * rho_l;                                          // Eq. C-4
+  const re = RE_CONST * rho_l * d_ft * v_t / mu_l;                            // Eq. C-6
+  const f = friction_factor(re, eps_d);
+  const bracket = Math.max((v_sl + v_b) / (v_t + v_b) + gamma, 0.0);
+  const tau = f * rho_l * v_t ** 2 / (2.0 * GC * d_ft) * bracket;             // Eq. C-10
+  return [rho, tau, { f, re, v_b, gamma }];
+}
+
+/**
+ * Mist flow (no slip) with gas superficial velocity v_g: [density, friction gradient, extras].
+ * The wall roughness seen by the gas is the Duns-Ros one (Eq. C-21, C-22), kept between 0.001 and
+ * 0.5 (a gas-only well uses the pipe's own roughness instead).
+ * @returns {[number, number, {f: number, re: number}]}
+ */
+function orkMist(v_sl, v_g, rho_l, rho_g, mu_l, mu_g, sigma_lbm, d_ft, eps_d, duns_ros_roughness = true) {
+  const f_g = v_g / (v_g + v_sl);                                             // Eq. C-19
+  const rho = (1.0 - f_g) * rho_l + f_g * rho_g;                              // Eq. C-2
+  if (duns_ros_roughness) {
+    const n_w = 4.52e-7 * (v_g * mu_l / sigma_lbm) ** 2 * rho_g / rho_l;
+    const k = n_w > 0.005 ? 174.8 * sigma_lbm * n_w ** 0.302 : 34.0 * sigma_lbm;
+    eps_d = Math.min(Math.max(k / (rho_g * v_g ** 2 * d_ft), 1e-3), 0.5);     // Eq. C-21 / C-22
+  }
+  const re = RE_CONST * rho_g * d_ft * v_g / mu_g;
+  const f = friction_factor(re, eps_d);
+  const tau = f * rho_g * v_g ** 2 / (2.0 * GC * d_ft);                       // Eq. C-20
+  return [rho, tau, { f, re }];
+}
+
+/**
+ * The flow pattern by the paper's Appendix B (liquid with a gas that has v_sg > 0).
+ * sigma_lbm : surface tension in lbm/s2 (1 dyne/cm = 0.0022046).
+ *   l_b  : bubble/slug boundary on the gas fraction (B-2, never below 0.13)
+ *   v_gd : dimensionless gas velocity (B-1), root = (rho_L / (g sigma))^0.25 is its factor v_g -> v_gD
+ *   l_s, l_m : slug/transition and transition/mist boundaries on v_gD (B-3, B-4)
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} sigma_lbm @param {number} d_ft
+ * @returns {{regime: string, gas_fraction: number, l_b: number, v_gd: number, l_s: number, l_m: number, root: number}}
+ */
+export function ork_flow_regime(v_sl, v_sg, rho_l, sigma_lbm, d_ft) {
+  const v_t = v_sl + v_sg;
+  const gas_fraction = v_sg / v_t;
+  const l_b = Math.max(1.071 - 0.2218 * v_t ** 2 / d_ft, 0.13);                  // B-2
+  const root = (rho_l / (GC * sigma_lbm)) ** 0.25;
+  const v_gd = v_sg * root;                                                      // B-1
+  const ratio = root * v_sl;              // v_gD q_L / q_g (v_g cancels, so v_g = 0 is fine)
+  const l_s = 50.0 + 36.0 * ratio;                                               // B-3
+  const l_m = 75.0 + 84.0 * ratio ** 0.75;                                       // B-4 (v_gD, see the notes above)
+  let regime;
+  if (gas_fraction < l_b) regime = "bubble";
+  else if (v_gd < l_s) regime = "slug";
+  else if (v_gd < l_m) regime = "transition";
+  else regime = "mist";
+  return { regime, gas_fraction, l_b, v_gd, l_s, l_m, root };
+}
+
+/**
+ * Orkiszewski pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient (c also carries 'frac_w', the water share of the liquid volume, which
+ * decides the continuous liquid phase).
+ * 'regime' is 'bubble', 'slug', 'transition', 'mist' or 'gas'; slug flow also returns 'v_b' and 'gamma'.
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ * @returns {{dpdl: number, hl: number, regime: string, hydrostatic: number, friction: number,
+ *            f_tp: number, re: number, e_k: number, v_b: number|null, gamma: number|null}}
+ */
+export function orkiszewski_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl, v_sg = c.v_sg;
+  const v_t = v_sl + v_sg;                            // total velocity (q_t / A_p)
+  check(v_t > 0, "No flow: mixture velocity is zero.");
+  const theta = radians(angle_deg);
+  const rho_l = c.rho_l, rho_g = c.rho_g, mu_l = c.mu_l, mu_g = c.mu_g;
+  const sigma = c.sigma * GRAY_SIGMA_UNIT;            // lbm/s2, the unit the paper's equations use
+  const eps_d = roughness_in / d_in;
+  const water_continuous = (c.frac_w ?? 0.0) >= ORK_WATER_CONTINUOUS;
+
+  /** @type {{f?: number, re?: number, v_b?: number, gamma?: number}} */
+  let extra = {};
+  let regime, rho, tau;
+  if (v_sl < 1e-9 * v_t) {                            // no liquid at all: gas only
+    regime = "gas";
+    [rho, tau, extra] = orkMist(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, false);
+    rho = rho_g;
+  } else {
+    const fp = ork_flow_regime(v_sl, v_sg, rho_l, sigma, d_ft);
+    regime = fp.regime;
+    if (regime === "bubble") {
+      [rho, tau, extra] = orkBubble(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d);
+    } else if (regime === "slug") {
+      [rho, tau, extra] = orkSlug(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d, water_continuous);
+    } else if (regime === "transition") {
+      const [rho_s, tau_s, extraSlug] = orkSlug(v_sl, v_sg, v_t, rho_l, rho_g, mu_l, d_ft, eps_d, water_continuous);
+      extra = extraSlug;
+      const v_g_mist = fp.l_m / fp.root;                       // Eq. C-18: gas rate of the mist calculation
+      const [rho_m, tau_m] = orkMist(v_sl, v_g_mist, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d);
+      const w_slug = (fp.l_m - fp.v_gd) / (fp.l_m - fp.l_s);   // Eq. C-17: weights with v_gD
+      rho = w_slug * rho_s + (1.0 - w_slug) * rho_m;
+      tau = w_slug * tau_s + (1.0 - w_slug) * tau_m;
+    } else {
+      [rho, tau, extra] = orkMist(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d);
+    }
+  }
+
+  const hl = Math.min(Math.max((rho - rho_g) / Math.max(rho_l - rho_g, 1e-9), 0.0), 1.0);
+  const hydrostatic = rho * Math.sin(theta) / 144.0;  // psi/ft
+  const friction = tau / 144.0;
+  const mass_flux = rho_l * v_sl + rho_g * v_sg;      // w_t / A_p, lb/s/ft2
+  const e_k = Math.min(mass_flux * v_sg / (GC * p * 144.0), 0.95);   // the kinetic term of Eq. A-3
+  const dpdl = (hydrostatic + friction) / (1.0 - e_k);
+  return { dpdl, hl, regime, hydrostatic, friction,
+           f_tp: extra.f ?? 0.0, re: extra.re ?? 0.0, e_k,
+           v_b: extra.v_b ?? null, gamma: extra.gamma ?? null };
+}
+
+
+// =====================================================================
+// Duns and Ros (1963) - "Vertical flow of gas and liquid mixtures in wells"
+// =====================================================================
+// Duns, H. Jr. and Ros, N.C.J., Proc. 6th World Petroleum Congress, Frankfurt, 1963,
+// Section II, Paper 22-PD6, p. 451.
+//
+// The pipe is described by four dimensionless numbers (the same ones Hagedorn and Brown use):
+//     N   = N_LV, liquid velocity number          RN = N_GV, gas velocity number
+//     N_d = pipe diameter number                  N_l = liquid viscosity number
+// and three flow regions, each with its own slip velocity and its own wall friction:
+//     Region I   (liquid continuous: bubble, plug and part of froth flow)   RN <= L1 + L2 N
+//     Region II  (slug flow and the rest of froth flow)                     up to RN = 50 + 36 N
+//     transition (between slug and mist)                                    50 + 36 N < RN < 75 + 84 N^0.75
+//     Region III (gas continuous: mist flow, no slip)                       RN >= 75 + 84 N^0.75
+// Slip velocity S (dimensionless) gives the liquid holdup, and with it the static gradient (Eq. 1).
+// The wall friction is added as a fraction of the liquid static gradient (Eq. 10 for Regions I-II,
+// Eq. 12 for III).  In the transition the gradient is interpolated on RN between the two region
+// boundaries, at a fixed gas mass flow (section VII).  The acceleration term (Eq. 17) is used in the
+// mist and transition ranges only, as the paper says.
+//
+// THE PAPER'S FUNCTIONS ARE CHARTS.  F1 - F4 (Fig. 5), L1, L2 (Fig. 6), F5 - F7 (Fig. 7) and f2
+// (Fig. 9) were read from the scanned figures (axis-calibrated, curve traced and checked on an
+// overlay) and are stored here as tables, interpolated on log(x) - the same numbers as the Python,
+// copied across mechanically rather than retyped.  Each value is good to roughly +-2 % of the
+// chart's reading; the chart's own scatter of the fit to its data is the 3 / 8 / 6 % the paper
+// quotes.  f1 (Fig. 8) is the Moody diagram, so the Colebrook equation is used (Fanning factor =
+// Darcy factor / 4).  Fig. 10 is the Weber-number correlation that Orkiszewski copied as C-21/C-22.
+//
+// Not used: Eq. 18 for wet mixtures.  It needs the dry oil and the water properties separately, and
+// the gradient interface carries one blended liquid (as for every other correlation here).  The
+// paper itself restricts it to a water cut below 10 %.  The correlation is for vertical flow; for an
+// inclined pipe the static gradient is multiplied by sin(angle) and the friction is unchanged.
+
+// Fig. 5: functions of the liquid viscosity number N_l
+const DR_F1 = [
+  [0.002, 0.002573, 0.00331, 0.004259, 0.005479, 0.007049, 0.009068, 0.01167, 0.01501, 0.01931, 0.02484, 0.03196, 0.04112, 0.0529, 0.06805, 0.08755, 0.1126, 0.1449, 0.1864, 0.2399, 0.3086, 0.397, 0.5107, 0.6571, 0.8453, 1.088, 1.399, 1.8],
+  [1.253, 1.25, 1.245, 1.245, 1.245, 1.245, 1.241, 1.25, 1.259, 1.268, 1.293, 1.363, 1.483, 1.631, 1.782, 1.922, 2.011, 2.041, 2.041, 1.994, 1.894, 1.755, 1.612, 1.433, 1.255, 1.09, 0.9642, 0.8825]];
+const DR_F2 = [
+  [0.002, 0.002573, 0.00331, 0.004259, 0.005479, 0.007049, 0.009068, 0.01167, 0.01501, 0.01931, 0.02484, 0.03196, 0.04112, 0.0529, 0.06805, 0.08755, 0.1126, 0.1449, 0.1864, 0.2399, 0.3086, 0.397, 0.5107, 0.6571, 0.8453, 1.088, 1.399, 1.8],
+  [0.2416, 0.2416, 0.2416, 0.2411, 0.2411, 0.2408, 0.2405, 0.2411, 0.246, 0.2667, 0.3046, 0.3777, 0.4709, 0.5807, 0.7116, 0.8472, 0.9499, 1.003, 1.015, 1.011, 0.9887, 0.9574, 0.9205, 0.881, 0.8393, 0.796, 0.7526, 0.7083]];
+const DR_F3 = [
+  [0.002, 0.002573, 0.00331, 0.004259, 0.005479, 0.007049, 0.009068, 0.01167, 0.01501, 0.01931, 0.02484, 0.03196, 0.04112, 0.0529, 0.06805, 0.08755, 0.1126, 0.1449, 0.1864, 0.2399, 0.3086, 0.397, 0.5107, 0.6571, 0.8453, 1.088, 1.399, 1.8],
+  [0.822, 0.822, 0.8295, 0.8377, 0.8661, 0.9778, 1.124, 1.25, 1.481, 1.778, 2.05, 2.279, 2.511, 2.725, 2.924, 3.104, 3.253, 3.371, 3.525, 3.618, 3.693, 3.774, 3.849, 3.916, 3.981, 4.036, 4.082, 4.141]];
+const DR_F4 = [
+  [0.002, 0.002573, 0.00331, 0.004259, 0.005479, 0.007049, 0.009068, 0.01167, 0.01501, 0.01931, 0.02484, 0.03196, 0.04112, 0.0529, 0.06805, 0.08755, 0.1126, 0.1449, 0.1864, 0.2399, 0.3086, 0.397, 0.5107, 0.6571, 0.8453, 1.088, 1.399, 1.8],
+  [-15.92, -8.31, -1.591, 4.567, 9.987, 15.76, 21.13, 26.25, 31.01, 35.75, 39.81, 44.17, 48.24, 51.08, 52.93, 53.88, 54.47, 54.85, 55.34, 55.44, 55.34, 55.05, 54.51, 54.76, 54.56, 54.56, 54.66, 54.76]];
+// Fig. 7: functions of N_l (F6 is the part of F6' that does not depend on the diameter)
+const DR_F5 = [
+  [0.002, 0.002578, 0.003324, 0.004284, 0.005523, 0.00712, 0.009178, 0.01183, 0.01525, 0.01966, 0.02534, 0.03267, 0.04212, 0.05429, 0.06999, 0.09022, 0.1163, 0.1499, 0.1933, 0.2492, 0.3212, 0.414, 0.5337, 0.688, 0.8869, 1.143, 1.474, 1.9],
+  [0.2193, 0.2147, 0.21, 0.2026, 0.1996, 0.1948, 0.1892, 0.1837, 0.1777, 0.1708, 0.1634, 0.1535, 0.1368, 0.1154, 0.09169, 0.07099, 0.05695, 0.04407, 0.04446, 0.04928, 0.05517, 0.06179, 0.07018, 0.07862, 0.08727, 0.09618, 0.1047, 0.1123]];
+const DR_F6 = [
+  [0.002, 0.002578, 0.003324, 0.004284, 0.005523, 0.00712, 0.009178, 0.01183, 0.01525, 0.01966, 0.02534, 0.03267, 0.04212, 0.05429, 0.06999, 0.09022, 0.1163, 0.1499, 0.1933, 0.2492, 0.3212, 0.414, 0.5337, 0.688, 0.8869, 1.143, 1.474, 1.9],
+  [0.829, 0.5999, 0.3948, 0.2387, 0.1101, 0.0102, -0.05731, -0.09881, -0.1158, -0.1206, 0.2942, 0.7332, 1.006, 1.322, 1.615, 2.039, 2.166, 2.1, 2, 1.918, 1.851, 1.808, 1.779, 1.765, 1.761, 1.763, 1.773, 1.779]];
+const DR_F7 = [
+  [0.002, 0.002578, 0.003324, 0.004284, 0.005523, 0.00712, 0.009178, 0.01183, 0.01525, 0.01966, 0.02534, 0.03267, 0.04212, 0.05429, 0.06999, 0.09022, 0.1163, 0.1499, 0.1933, 0.2492, 0.3212, 0.414, 0.5337, 0.688, 0.8869, 1.143, 1.474, 1.9],
+  [0.1312, 0.1267, 0.1201, 0.1131, 0.1053, 0.09798, 0.09077, 0.08349, 0.07637, 0.07017, 0.06406, 0.06109, 0.05689, 0.05395, 0.05079, 0.04763, 0.04447, 0.04131, 0.03815, 0.03499, 0.03182, 0.02866, 0.02719, 0.02614, 0.02524, 0.02438, 0.02376, 0.02321]];
+// Fig. 6: limits of Region I, as functions of the diameter number N_d (RN <= L1 + L2 N)
+const DR_L1 = [
+  [16, 18.27, 20.87, 23.83, 27.21, 31.08, 35.49, 40.53, 46.28, 52.85, 60.36, 68.92, 78.71, 89.89, 102.6, 117.2, 133.9, 152.9, 174.6, 199.4, 227.7, 260],
+  [1.991, 1.991, 1.99, 1.987, 1.967, 1.907, 1.753, 1.571, 1.394, 1.213, 1.064, 1.006, 1, 1, 1, 1, 1, 1.01, 1.01, 1.01, 1.01, 1.01]];
+const DR_L2 = [
+  [16, 18.27, 20.87, 23.83, 27.21, 31.08, 35.49, 40.53, 46.28, 52.85, 60.36, 68.92, 78.71, 89.89, 102.6, 117.2, 133.9, 152.9, 174.6, 199.4, 227.7, 260],
+  [0.4862, 0.5273, 0.5781, 0.6383, 0.7005, 0.7644, 0.8321, 0.904, 0.9704, 1.01, 1.052, 1.076, 1.087, 1.097, 1.103, 1.111, 1.114, 1.125, 1.121, 1.119, 1.114, 1.111]];
+// Fig. 9: friction factor f2 against f1 * R * N_d^(2/3), R = v_sg / v_sl
+const DR_FRICTION_F2 = [
+  [0.0014, 0.002386, 0.004066, 0.00693, 0.01181, 0.02013, 0.0343, 0.05846, 0.09963, 0.1698, 0.2894, 0.4932, 0.8405, 1.432, 2.441, 4.161, 7.091, 12.08, 20.59, 35.1, 59.82, 101.9, 173.7, 296.1, 504.6, 860],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.9757, 0.8045, 0.673, 0.5623, 0.4647, 0.3866, 0.3195, 0.2735, 0.2431, 0.2206, 0.2032, 0.2005, 0.2005, 0.201, 0.204]];
+
+/**
+ * Value of a tabulated chart curve at x: straight line in log(x) between the nodes, constant beyond
+ * the first and last node (the charts end there).
+ * @param {number} x @param {number[][]} table
+ */
+function drTable(x, table) {
+  const xs = table[0], ys = table[1];
+  if (x <= xs[0]) return ys[0];
+  if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+  // the same index Python's bisect.bisect_right(xs, x) - 1 gives
+  let lo = 0, hi = xs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (x < xs[mid]) hi = mid; else lo = mid + 1;
+  }
+  const i = lo - 1;
+  const w = (Math.log(x) - Math.log(xs[i])) / (Math.log(xs[i + 1]) - Math.log(xs[i]));
+  return ys[i] + w * (ys[i + 1] - ys[i]);
+}
+
+/**
+ * The Duns and Ros dimensionless numbers (field units in, same constants as hagedorn_brown).
+ * f_v converts a velocity in ft/s into a velocity number.
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} sigma
+ * @param {number} mu_l @param {number} d_ft
+ * @returns {{n: number, rn: number, n_d: number, n_l: number, f_v: number}}
+ */
+export function dr_numbers(v_sl, v_sg, rho_l, sigma, mu_l, d_ft) {
+  const f_v = 1.938 * (rho_l / sigma) ** 0.25;
+  return { n: f_v * v_sl, rn: f_v * v_sg,
+           n_d: 120.872 * d_ft * (rho_l / sigma) ** 0.5,
+           n_l: 0.15726 * mu_l * (1.0 / (rho_l * sigma ** 3)) ** 0.25,
+           f_v };
+}
+
+/**
+ * RN at the end of Region II (Eq. 7) and at the start of Region III (Eq. 9).  The end of Region I
+ * (L1 + L2 N, Eq. 5) also needs N_d and is found in dr_flow_region().
+ * @param {number} n @returns {[number, number]}
+ */
+export function dr_region_limits(n) {
+  return [50.0 + 36.0 * n, 75.0 + 84.0 * n ** 0.75];
+}
+
+/**
+ * Dimensionless slip velocity of Region I (Eq. 4):
+ *   S = F1 + F2 N + F3' (RN / (1 + N))^2,  F3' = F3 - F4 / N_d
+ * @param {number} n @param {number} rn @param {number} n_d @param {number} n_l
+ */
+export function dr_slip_region1(n, rn, n_d, n_l) {
+  const f3p = drTable(n_l, DR_F3) - drTable(n_l, DR_F4) / n_d;
+  return drTable(n_l, DR_F1) + drTable(n_l, DR_F2) * n + f3p * (rn / (1.0 + n)) ** 2;
+}
+
+/**
+ * Dimensionless slip velocity of Region II (Eq. 6):
+ *   S = (1 + F5) (RN^0.982 + F6') / (1 + F7 N)^2,  F6' = 0.029 N_d + F6
+ * @param {number} n @param {number} rn @param {number} n_d @param {number} n_l
+ */
+export function dr_slip_region2(n, rn, n_d, n_l) {
+  const f6p = 0.029 * n_d + drTable(n_l, DR_F6);
+  return (1.0 + drTable(n_l, DR_F5)) * (rn ** 0.982 + f6p) / (1.0 + drTable(n_l, DR_F7) * n) ** 2;
+}
+
+/**
+ * Liquid holdup from the dimensionless slip S (Eqs. 2 and 3): v_s = S / f_v is the slip velocity
+ * v_sg/(1-H) - v_sl/H, solved for H.  S below zero (liquid faster than gas) is not possible upward
+ * and is taken as 0.
+ * @param {number} v_sl @param {number} v_sg @param {number} s @param {number} f_v
+ */
+export function dr_holdup(v_sl, v_sg, s, f_v) {
+  const v_s = Math.max(s, 0.0) / f_v;
+  // v_sg/(1-H) - v_sl/H = v_s  ->  v_s H^2 - (v_s - v_sg - v_sl) H - v_sl = 0, written so v_s = 0 is allowed
+  const b = v_s - v_sg - v_sl;
+  return 2.0 * v_sl / (-b + Math.sqrt(b * b + 4.0 * v_s * v_sl));
+}
+
+/**
+ * Fanning friction factor of Fig. 8: Colebrook / 4, and Eq. 15 for a relative roughness above 0.05
+ * (the Moody diagram stops there).
+ * @param {number} re @param {number} eps_d
+ */
+function drFanning(re, eps_d) {
+  if (eps_d > 0.05 && re >= 4000.0) {
+    return 1.0 / (4.0 * Math.log10(0.27 * eps_d)) ** 2 + 0.067 * eps_d ** 1.73;
+  }
+  return friction_factor(re, eps_d) / 4.0;
+}
+
+/**
+ * Relative roughness e/D of the liquid film on the wall in mist flow (Eq. 14 and Fig. 10).
+ * Weber number We = rho_g v_sg^2 e / sigma is 34, or higher for a viscous liquid
+ * (We = 174.8 X^0.302 with X = rho_g v_sg^2 mu_L^2 / (rho_L sigma^2) above X = 0.0044 - the form
+ * Orkiszewski copied as Eqs. C-21 / C-22).  The result is kept between the pipe's own roughness
+ * (at least 0.001) and 0.5 (liquid bridges).
+ * @param {number} v_sg @param {number} rho_g @param {number} rho_l @param {number} mu_l
+ * @param {number} sigma_dyne @param {number} d_ft @param {number} pipe_eps_d
+ * @returns {[number, number]} [relative roughness, Weber number]
+ */
+export function dr_mist_film_roughness(v_sg, rho_g, rho_l, mu_l, sigma_dyne, d_ft, pipe_eps_d) {
+  const sigma = sigma_dyne * GRAY_SIGMA_UNIT;                            // lbm/s2
+  const x = 4.52e-7 * (v_sg * mu_l / sigma) ** 2 * rho_g / rho_l;        // 4.52e-7 turns cP into lbm/ft/s squared
+  const we = x > 0.0 ? Math.max(34.0, 174.8 * x ** 0.302) : 34.0;
+  const e_d = we * sigma / (rho_g * v_sg ** 2 * d_ft);
+  return [Math.min(Math.max(e_d, 0.001, pipe_eps_d), 0.5), we];
+}
+
+/**
+ * Holdup, static gradient and friction gradient of one region, both as fractions of the liquid
+ * static gradient (G_st, G_fr).  region = 1, 2 or 3.
+ * @returns {[number, number, number, number, number]} [holdup, G_st, G_fr, f used, Reynolds number]
+ */
+function drGradientParts(region, v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, pipe_eps_d) {
+  const nm = dr_numbers(v_sl, v_sg, rho_l, sigma, mu_l, d_ft);
+  const n = nm.n, rn = nm.rn, n_d = nm.n_d, n_l = nm.n_l;
+  let h, g_fr, f_used, re;
+  if (region === 3) {
+    h = v_sl / (v_sl + v_sg);                                            // Eq. 8: no slip
+    const [eps_d] = dr_mist_film_roughness(v_sg, rho_g, rho_l, mu_l, sigma, d_ft, pipe_eps_d);
+    re = RE_CONST * rho_g * v_sg * d_ft / mu_g;
+    const f1 = drFanning(re, eps_d);
+    g_fr = 2.0 * f1 * (rho_g / rho_l) * rn ** 2 / n_d;                   // Eq. 12
+    f_used = f1;
+  } else {
+    const s = region === 1 ? dr_slip_region1(n, rn, n_d, n_l) : dr_slip_region2(n, rn, n_d, n_l);
+    h = dr_holdup(v_sl, v_sg, s, nm.f_v);
+    re = RE_CONST * rho_l * v_sl * d_ft / mu_l;                          // liquid Reynolds number
+    const f1 = drFanning(re, pipe_eps_d);
+    const r = v_sg / v_sl;
+    const f2 = drTable(f1 * r * n_d ** (2.0 / 3.0), DR_FRICTION_F2);
+    const f3 = 1.0 + f1 * Math.sqrt(r / 50.0);
+    f_used = f1 * f2 / f3;                                               // Eq. 11
+    g_fr = 2.0 * f_used * n * (n + rn) / n_d;                            // Eq. 10
+  }
+  const g_st = h + (1.0 - h) * rho_g / rho_l;                            // Eq. 1
+  return [h, g_st, g_fr, f_used, re];
+}
+
+/**
+ * Region of the Duns and Ros correlation: 'bubble' (Region I), 'slug' (Region II), 'transition' or
+ * 'mist' (Region III).  rn_1 is the end of I, rn_2 the end of II, rn_3 the start of III.
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} sigma
+ * @param {number} mu_l @param {number} d_ft
+ * @returns {{n: number, rn: number, n_d: number, n_l: number, f_v: number, regime: string,
+ *            rn_1: number, rn_2: number, rn_3: number}}
+ */
+export function dr_flow_region(v_sl, v_sg, rho_l, sigma, mu_l, d_ft) {
+  const nm = dr_numbers(v_sl, v_sg, rho_l, sigma, mu_l, d_ft);
+  const rn_1 = drTable(nm.n_d, DR_L1) + drTable(nm.n_d, DR_L2) * nm.n;       // Eq. 5
+  const [rn_2, rn_3] = dr_region_limits(nm.n);
+  let regime;
+  if (nm.rn <= rn_1) regime = "bubble";
+  else if (nm.rn <= rn_2) regime = "slug";
+  else if (nm.rn < rn_3) regime = "transition";
+  else regime = "mist";
+  return { ...nm, regime, rn_1, rn_2, rn_3 };
+}
+
+/**
+ * Duns and Ros pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient.  'regime' is 'bubble' (Region I), 'slug' (Region II), 'transition',
+ * 'mist' (Region III) or 'gas'; 'f_tp' is the paper's f_w, or f1 in mist flow; 're' is the Reynolds
+ * number f1 was read at; 'e_k' is the acceleration term of Eq. 17, only in the transition and mist
+ * ranges; 'rn' and 'n' are the velocity numbers.
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ * @returns {{dpdl: number, hl: number, regime: string, hydrostatic: number, friction: number,
+ *            f_tp: number, re: number, e_k: number, rn: number, n: number}}
+ */
+export function duns_ros_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl, v_sg = c.v_sg;
+  check(v_sl + v_sg > 0, "No flow: mixture velocity is zero.");
+  const sin_t = Math.sin(radians(angle_deg));
+  const rho_l = c.rho_l, rho_g = c.rho_g, mu_l = c.mu_l, mu_g = c.mu_g, sigma = c.sigma;
+  const pipe_eps_d = roughness_in / d_in;
+  const mass_flux = rho_l * v_sl + rho_g * v_sg;                            // lb/s/ft2
+
+  if (v_sl < 1e-9 * (v_sl + v_sg)) {                                        // no liquid: single-phase gas
+    const re = RE_CONST * rho_g * v_sg * d_ft / mu_g;
+    const f = friction_factor(re, pipe_eps_d);
+    const hydrostatic = rho_g * sin_t / 144.0;
+    const friction = f * rho_g * v_sg ** 2 / (2.0 * GC * d_ft) / 144.0;
+    const e_k = Math.min(mass_flux * v_sg / (GC * p * 144.0), 0.95);
+    return { dpdl: (hydrostatic + friction) / (1.0 - e_k), hl: 0.0, regime: "gas",
+             hydrostatic, friction, f_tp: f, re, e_k,
+             rn: 1.938 * v_sg * (rho_l / sigma) ** 0.25, n: 0.0 };
+  }
+
+  const fp = dr_flow_region(v_sl, v_sg, rho_l, sigma, mu_l, d_ft);
+  const regime = fp.regime;
+  let h, g_st, g_fr, f_used, re;
+  if (regime === "bubble" || regime === "slug" || regime === "mist") {
+    const region = { bubble: 1, slug: 2, mist: 3 }[regime];
+    [h, g_st, g_fr, f_used, re] = drGradientParts(region, v_sl, v_sg, rho_l, rho_g, mu_l, mu_g,
+                                                  sigma, d_ft, pipe_eps_d);
+  } else {
+    // Transition: linear in RN between the end of Region II and the start of Region III (section
+    // VII).  The mist end is evaluated at the gas velocity of that RN with the gas density that
+    // keeps rho_g v_sg fixed.
+    const v_sg_2 = fp.rn_2 / fp.f_v;
+    const v_sg_3 = fp.rn_3 / fp.f_v;
+    const [h2, st2, fr2, f2used, re2] = drGradientParts(2, v_sl, v_sg_2, rho_l, rho_g, mu_l, mu_g,
+                                                        sigma, d_ft, pipe_eps_d);
+    const [h3, st3, fr3] = drGradientParts(3, v_sl, v_sg_3, rho_l, rho_g * v_sg / v_sg_3, mu_l,
+                                           mu_g, sigma, d_ft, pipe_eps_d);
+    f_used = f2used; re = re2;
+    const w3 = (fp.rn - fp.rn_2) / (fp.rn_3 - fp.rn_2);                   // weight of the mist end
+    h = (1.0 - w3) * h2 + w3 * h3;
+    g_st = (1.0 - w3) * st2 + w3 * st3;
+    g_fr = (1.0 - w3) * fr2 + w3 * fr3;
+  }
+
+  const hydrostatic = g_st * rho_l * sin_t / 144.0;        // G = (dp/dh) / (rho_L g), g / gc = 1
+  const friction = g_fr * rho_l / 144.0;
+  let e_k = 0.0;
+  if (regime === "transition" || regime === "mist") {
+    e_k = Math.min(mass_flux * v_sg / (GC * p * 144.0), 0.95);            // Eq. 17
+  }
+  return { dpdl: (hydrostatic + friction) / (1.0 - e_k), hl: h, regime,
+           hydrostatic, friction, f_tp: f_used, re, e_k, rn: fp.rn, n: fp.n };
 }

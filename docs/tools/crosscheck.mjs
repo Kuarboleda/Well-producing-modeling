@@ -62,6 +62,12 @@ const MAP = {
   hagedorn_brown_gradient: vlp.hagedorn_brown_gradient,
   gray_holdup: vlp.gray_holdup, gray_effective_roughness: vlp.gray_effective_roughness,
   gray_gradient: vlp.gray_gradient,
+  ork_bubble_rise_velocity: vlp.ork_bubble_rise_velocity, ork_gamma: vlp.ork_gamma,
+  ork_flow_regime: vlp.ork_flow_regime, orkiszewski_gradient: vlp.orkiszewski_gradient,
+  dr_numbers: vlp.dr_numbers, dr_region_limits: vlp.dr_region_limits,
+  dr_slip_region1: vlp.dr_slip_region1, dr_slip_region2: vlp.dr_slip_region2,
+  dr_holdup: vlp.dr_holdup, dr_mist_film_roughness: vlp.dr_mist_film_roughness,
+  dr_flow_region: vlp.dr_flow_region, duns_ros_gradient: vlp.duns_ros_gradient,
 };
 
 /** Relative difference, falling back to the absolute one for numbers near zero. */

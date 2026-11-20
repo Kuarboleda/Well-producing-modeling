@@ -19,7 +19,7 @@ replaces it yet.
 | `app.js` | wiring only - reads the boxes, calls the engine, draws the chart. No engineering in it |
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
-| `vlp.js` | translation of `vlp.py`, **in progress**: friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray |
+| `vlp.js` | translation of `vlp.py`, **in progress**: friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros |
 | `units.js` | the one place where psig (what you type) meets psia (what the engine uses) |
 | `tools/dump_pvt.py`, `tools/dump_ipr.py` | run the PYTHON engine over thousands of cases and save the answers |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
@@ -29,7 +29,7 @@ cross-checked before the next begins:
 
 1. **done** - friction factor, surface tension, Beggs and Brill (1973)
 2. **done** - Hagedorn and Brown (1965) with the Griffith bubble correction, Gray (1974)
-3. Orkiszewski, Duns and Ros
+3. **done** - Orkiszewski (1967), Duns and Ros (1963) with its eight chart tables
 4. Ansari (including the slug-flow blend), Mukherjee and Brill
 5. Fancher and Brown, the fluid objects, the pressure traverse and the step solver
 
@@ -52,7 +52,7 @@ node tools/crosscheck.mjs
 Every function keeps the same name and the same argument order on both sides, so the comparison needs
 no knowledge of the physics. The tolerance is 1e-9 (about ten decimal places).
 
-As of 20 Nov 2026: **20,524 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
+As of 20 Nov 2026: **27,557 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
 floating-point rounding. Most IPR functions agree exactly, to the last bit.
 
 This is not a formality. Within the first ten minutes it found a real bug in the Python: `pb_petrosky`
