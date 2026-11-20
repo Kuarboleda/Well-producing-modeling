@@ -102,3 +102,14 @@ most in a file full of numbers.
 * **Saving a case** writes a small `.json` file to your computer and opening one reads it back. There
   is no server, so there is nowhere else for it to go - which also means nothing you type is ever sent
   anywhere.
+
+## Licence
+
+Copyright (c) 2026 Vu Huu Huy. Free for non-commercial use; see `LICENSE.md` at the top of the
+repository.
+
+Worth knowing, because it follows from how this app works: a browser app sends its JavaScript to
+every visitor, so anyone can read `pvt.js`, `ipr.js` and `vlp.js` from the page itself. That is
+inherent to running without a server and has nothing to do with the repository being public. The
+licence sets out what people may legally do with the code; it does not and cannot stop them reading
+it.

@@ -504,3 +504,9 @@ What the point-by-point comparison shows:
 * **Known gap**: the wellhead temperature of the deviated well (reference 179 F, ours 152 F). The vertical well agrees within 2 F.
 
 Check results against a commercial program before relying on them for decisions.
+
+## Licence
+
+Copyright (c) 2026 Vu Huu Huy. Free for non-commercial use; commercial use requires a licence from
+the author. See `LICENSE.md`, which also carries the warning that results must be reviewed by a
+competent engineer before being relied on.
