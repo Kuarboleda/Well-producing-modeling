@@ -19,6 +19,12 @@ import * as nodal from "./nodal.js";
 import * as units from "./units.js";
 import * as advice from "./advice.js";
 
+// One place for the chart colours, so a pressure line is the same colour wherever it is drawn.
+const IPR_COLOUR = "#1f77b4";     // the inflow curve, and the pressure down the well
+const VLP_COLOUR = "#d62728";     // the tubing curve
+const TEMP_COLOUR = "#ff7f0e";    // temperature
+const GASLIFT_COLOUR = "#2ca02c"; // the gas lift injection depth
+
 const CURVE_POINTS = 41;          // points along the inflow curve on its own
 const NODAL_POINTS = 25;          // points along each curve when the VLP is calculated too
 
@@ -635,7 +641,7 @@ function recalculate() {
   drawTable(pwfShown, qShown, rateLabel, pressureLabel);
   plot("chart-nodal", [{
     x: qShown, y: pwfShown, mode: "lines", name: "IPR",
-    line: { color: "#1f77b4", width: 2.5 },
+    line: { color: IPR_COLOUR, width: 2.5 },
     hovertemplate: `%{x:,.0f} ${rateLabel}<br>%{y:,.0f} ${pressureLabel}<extra>IPR</extra>`,
   }], {
     ...layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`),
@@ -691,9 +697,9 @@ function runNodal() {
   /** @type {any[]} */
   const traces = [
     { x: cv.ipr_q.map(toRate), y: cv.ipr_pwf.map(toP), mode: "lines", name: "IPR",
-      line: { color: "#1f77b4", width: 2.5 } },
+      line: { color: IPR_COLOUR, width: 2.5 } },
     { x: cv.vlp_q.map(toRate), y: cv.vlp_pwf.map(toP), mode: "lines", name: "VLP",
-      line: { color: "#d62728", width: 2.5 } },
+      line: { color: VLP_COLOUR, width: 2.5 } },
   ];
   const items = [];
   if (res.found) {
@@ -816,31 +822,34 @@ function drawProfile(tr, c) {
   const tempLabel = units.unitOf("temperature");
   const lengthLabel = units.unitOf("length");
   const tvd = tr.tvd.map((/** @type {number} */ v) => units.fromEngine("length", v));
+  // Temperature on the bottom axis, pressure on the top one, and the pressure drawn in the same blue
+  // as the IPR so that the pressure line is the same colour wherever it appears on the page.
+  const pressure = tr.p.map((/** @type {number} */ p) => units.fromEngine("pressure", p));
   /** @type {any[]} */
   const traces = [
-    { x: tr.p.map((/** @type {number} */ p) => units.fromEngine("pressure", p)), y: tvd,
-      mode: "lines", name: `Pressure (${pressureLabel})`,
-      line: { color: "#d62728", width: 2.5 },
-      hovertemplate: `%{x:,.0f} ${pressureLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
     { x: tr.T.map((/** @type {number} */ t) => units.fromEngine("temperature", t)), y: tvd,
-      mode: "lines", name: `Temperature (${tempLabel})`, xaxis: "x2",
-      line: { color: "#ff7f0e", width: 2, dash: "dot" },
+      mode: "lines", name: `Temperature (${tempLabel})`,
+      line: { color: TEMP_COLOUR, width: 2, dash: "dot" },
       hovertemplate: `%{x:,.0f} ${tempLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
+    { x: pressure, y: tvd, xaxis: "x2",
+      mode: "lines", name: `Pressure (${pressureLabel})`,
+      line: { color: IPR_COLOUR, width: 2.5 },
+      hovertemplate: `%{x:,.0f} ${pressureLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
   ];
   if (c.gas_lift) {
     const depth = units.fromEngine("length", wellmod.tvd_at(c.well, c.gas_lift.md));
-    traces.push({ x: [Math.min(...traces[0].x), Math.max(...traces[0].x)], y: [depth, depth],
+    // drawn across the pressure axis, which is the line this depth belongs to
+    traces.push({ x: [Math.min(...pressure), Math.max(...pressure)], y: [depth, depth], xaxis: "x2",
                   mode: "lines", name: "Gas injection",
-                  line: { color: "#2ca02c", width: 1.5, dash: "dash" } });
+                  line: { color: GASLIFT_COLOUR, width: 1.5, dash: "dash" } });
   }
   plot("chart-profile", traces, {
-    ...layoutFor(`Pressure (${pressureLabel})`, `True vertical depth (${lengthLabel})`),
+    ...layoutFor(`Temperature (${tempLabel})`, `True vertical depth (${lengthLabel})`),
     yaxis: { title: { text: `True vertical depth (${lengthLabel})` }, autorange: "reversed",
              gridcolor: "#eef2f5", zeroline: false },
-    xaxis: { title: { text: `Pressure (${pressureLabel})` }, gridcolor: "#eef2f5", zeroline: false,
-             rangemode: "tozero" },
-    xaxis2: { title: { text: `Temperature (${tempLabel})` }, overlaying: "x", side: "top",
-              gridcolor: "transparent", zeroline: false },
+    xaxis: { title: { text: `Temperature (${tempLabel})` }, gridcolor: "#eef2f5", zeroline: false },
+    xaxis2: { title: { text: `Pressure (${pressureLabel})` }, overlaying: "x", side: "top",
+              gridcolor: "transparent", zeroline: false, rangemode: "tozero" },
     margin: { l: 70, r: 16, t: 42, b: 48 },
   });
 }
@@ -1011,7 +1020,7 @@ function sensitivityNow() {
   plot("chart-sens", [{
     x: found.map((r) => r.value), y: found.map((r) => toRate(r.q)),
     mode: "lines+markers", name: `Rate (${rateLabel})`,
-    line: { color: "#1f77b4", width: 2.5 }, marker: { size: 8 },
+    line: { color: IPR_COLOUR, width: 2.5 }, marker: { size: 8 },
   }], layoutFor(choice.quantity ? `${choice.label} (${units.unitOf(choice.quantity)})` : choice.label,
                 `Operating rate (${rateLabel})`));
 

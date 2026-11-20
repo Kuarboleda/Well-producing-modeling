@@ -97,15 +97,26 @@ check("IPR, VLP and the operating point are all drawn", (await traceCount("chart
       `${await traceCount("chart-nodal")} traces`);
 check("the profile chart is drawn", (await traceCount("chart-profile")) === 2);
 const prof = await plotOf("chart-profile");
+const lineFor = (what) => prof.traces.find((t) => t.name.includes(what));
 check("depth runs downwards", prof.layout.yaxis.autorange === "reversed");
 check("the profile has a pressure line and a temperature line",
-      prof.traces[0].name.includes("Pressure") && prof.traces[1].name.includes("Temperature"));
-check("the profile starts at the wellhead pressure", near(prof.traces[0].x[0], 200, 1e-6),
-      `${prof.traces[0].x[0]} psig`);
-check("the profile ends at the operating Pwf", near(prof.traces[0].x.at(-1), pwf, 2e-3),
-      `${prof.traces[0].x.at(-1)} vs ${pwf}`);
-check("the profile ends at the reservoir temperature", near(prof.traces[1].x.at(-1), 200, 1e-6),
-      `${prof.traces[1].x.at(-1)} degF`);
+      Boolean(lineFor("Pressure")) && Boolean(lineFor("Temperature")));
+// temperature on the bottom axis, pressure on the top one
+check("temperature is on the bottom axis", prof.layout.xaxis.title.text.includes("degF"),
+      prof.layout.xaxis.title.text);
+check("pressure is on the top axis", prof.layout.xaxis2.title.text.includes("psig")
+      && prof.layout.xaxis2.side === "top", prof.layout.xaxis2.title.text);
+check("the pressure line is drawn against the top axis", lineFor("Pressure").xaxis === "x2");
+check("the pressure line is the same blue as the IPR",
+      lineFor("Pressure").line.color === first.traces[0].line.color,
+      `${lineFor("Pressure").line.color} vs IPR ${first.traces[0].line.color}`);
+check("the profile starts at the wellhead pressure", near(lineFor("Pressure").x[0], 200, 1e-6),
+      `${lineFor("Pressure").x[0]} psig`);
+check("the profile ends at the operating Pwf", near(lineFor("Pressure").x.at(-1), pwf, 2e-3),
+      `${lineFor("Pressure").x.at(-1)} vs ${pwf}`);
+check("the profile ends at the reservoir temperature",
+      near(lineFor("Temperature").x.at(-1), 200, 1e-6),
+      `${lineFor("Temperature").x.at(-1)} degF`);
 const profNote = await page.$eval("#profile-note", (n) => n.innerText);
 check("the profile note reports both ends", profNote.includes("wellhead") && profNote.includes("perforations"));
 check("the profile note reports the gravity/friction split", profNote.includes("gravity") && profNote.includes("friction"));
