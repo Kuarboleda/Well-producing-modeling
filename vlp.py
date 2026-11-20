@@ -1694,10 +1694,9 @@ class GasFluid:
 # The factor is a function of N and the GLR only: the viscosity, the pipe roughness and the angle are not in it
 # (the paper found viscous shear negligible).  There is no acceleration term.
 #
-# What PROSPER does with it: because it ignores slip it gives the LOWEST possible VLP; PROSPER offers it only as a
-# quality check (a measured flowing pressure to the left of it on the correlation comparison plot means that the PVT
-# or the pressure data are wrong) and says it "should never be used for actual calculations".  That is how the app
-# labels it too.
+# How it is meant to be used: because it ignores slip it gives the LOWEST possible VLP, so it belongs in the
+# correlation comparison as a quality check - a measured flowing pressure to the left of it means the PVT or the
+# pressure data are wrong - and not in a real calculation.  That is how the app labels it.
 #
 # The lines are chart readings (digitised from the paper's figures, about +/- 3 %).  Fig. 7 is a curve (steep below
 # N = 6 and straight on the log-log paper above); Figs. 8 and 9 are straight lines.  The lines are drawn in the paper for
@@ -1894,7 +1893,7 @@ MULTIPLIER_MIN, MULTIPLIER_MAX = 0.1, 10.0      # sanity limits for the VLP mult
 def _with_multipliers(gradient, gravity_mult, friction_mult):
     """Wrap a gradient function so that its gravity and friction parts are scaled.
 
-    This is the "VLP matching" of PROSPER: no correlation fits every well, so the gravity
+    This is what the industry calls "VLP matching": no correlation fits every well, so the gravity
     (hydrostatic) part and the friction part of the pressure drop can each be multiplied by
     a number found by matching measured data.  1.0 and 1.0 leave the correlation unchanged.
 
@@ -1930,7 +1929,7 @@ def pressure_traverse(well, fluid, rate, p_wh, correlation="beggs_brill", max_st
     Returns a dictionary of lists (wellhead first): md, tvd, p, T, plus
     'holdup' (one value per step) and 'pwf' = pressure at the perforations.
     It also gives 'dp_hydrostatic' and 'dp_friction' (psi, added up over the whole
-    well).  They are the same split PROSPER shows as "dP Gravity" and "dP Friction";
+    well).  They are the usual "dP Gravity" and "dP Friction" split;
     the rest of (pwf - p_wh) is the small acceleration term.
     """
     if correlation in _NOT_YET:

@@ -829,7 +829,8 @@ check_equal("the gas layer chart has one line per layer plus the composite", len
 # =====================================================================
 print("\n== Which VLP correlation suits the well (advice and comparison) ==")
 # =====================================================================
-# Source of the rules: PROSPER manual 2.8.1.1.1 and the papers (see correlation_advice()).  The expected values
+# Source of the rules: the correlation papers themselves and standard industry practice (see
+# correlation_advice()).  The expected values
 # below follow from those rules and from hand geometry.
 oil0 = dict(DEFAULTS)                                             # vertical, API 35, 30 % water
 check("a vertical well has 0 degrees of inclination", max_inclination_deg(oil0), 0.0, 1e-9)
@@ -889,7 +890,7 @@ oil_s = dict(DEFAULTS)
 test_s = dict(p_wh=200.0, rate=2000.0, rate_type="liquid", water_cut=0.2, gor=500.0, gl_rate=0.0, gl_md=0.0, cgr=0.0, wgr=0.0)
 COL_D, COL_P = SURVEY_COLUMNS
 check_equal("the table has the two columns depth and pressure", SURVEY_COLUMNS, ("Depth MD (ft)", "Pressure (psig)"))
-check_equal("at most 10 points, as in PROSPER", SURVEY_MAX_POINTS, 10)
+check_equal("at most 10 survey points", SURVEY_MAX_POINTS, 10)
 
 # the measured points of the table
 d_, p_ = survey_points([{COL_D: 5000.0, COL_P: 1200.0}, {COL_D: None, COL_P: None}, {COL_D: 2000.0, COL_P: 700.0},

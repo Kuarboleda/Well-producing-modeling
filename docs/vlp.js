@@ -4,9 +4,11 @@
  *
  * Being written in stages, each one cross-checked against the Python before the next begins.
  * Done so far: the friction factor, surface tension, Beggs and Brill (1973),
- * Hagedorn and Brown (1965), Gray (1974), Orkiszewski (1967) and Duns and Ros (1963).
- * Still to come: Ansari, Mukherjee and Brill, Fancher and Brown, the fluids and the
- * pressure traverse.
+ * Hagedorn and Brown (1965), Gray (1974), Orkiszewski (1967), Duns and Ros (1963)
+ * Ansari et al. (1994), Mukherjee and Brill (1983/1985) and Fancher and Brown (1963)
+ * - that is, all eight correlations.
+ * Still to come: the fluid objects and the pressure traverse that walks a gradient up
+ * the well.
  *
  * Every function keeps the same name and the same argument order as the Python, so
  * tools/crosscheck.mjs can call both with one list of numbers.
@@ -760,6 +762,465 @@ export function orkiszewski_gradient(p, angle_deg, d_in, roughness_in, c) {
 
 
 // =====================================================================
+// Ansari et al. (1994) - a mechanistic model
+// =====================================================================
+// Ansari, A.M., Sylvester, N.D., Sarica, C., Shoham, O. and Brill, J.P., "A Comprehensive Mechanistic
+// Model for Upward Two-Phase Flow in Wellbores", SPE Production & Facilities, May 1994, p. 143.
+//
+// Instead of a curve fitted to field data, the model first decides the flow pattern from the physics
+// (Taitel and Barnea boundaries), then uses a separate physical model for each pattern:
+//     bubble / dispersed bubble : drift-flux holdup, mixture friction
+//     slug (and churn)          : a Taylor bubble followed by a liquid slug (Fernandes, Sylvester,
+//                                 Vo and Shoham), fully developed or still developing
+//     annular                   : a liquid film on the wall and a gas core carrying liquid droplets
+// The paper leaves out the acceleration term, so there is none here.  Everything inside these
+// functions is in feet, pounds and seconds (g = 32.174 ft/s2); the result is in psi per ft.
+//
+// Notes on how the paper is coded (the same notes as the Python, and the README has the reasons):
+//   * Equation 40 (the constant A in slug equation 39) is not used as printed.  The slug equation is
+//     rebuilt from the paper's own equations 29 - 35, 37 and 38 (see ansSlug).
+//   * Equation 45 (the Nusselt film thickness) is used with the liquid holdup H_NLTB of the film, as
+//     the Nusselt film requires, where the paper prints (1 - H_NLTB).
+//   * Equation 54 for the length of a developing Taylor bubble is solved for its square root
+//     directly; b is taken from equations 52 and 53.
+//   * The friction factor in the dispersed-bubble boundary (Eq. 4) uses the liquid Reynolds number of
+//     the mixture velocity.  Moody factors are Colebrook (the paper reads a chart).
+//   * Annular flow is accepted only if the film the annular model itself finds (Eq. 93) is also too
+//     thin to bridge the pipe.  Without this, a gas rate just above Eq. 6 can give a thick,
+//     unphysical "annular" film and a very large pressure gradient.
+//   * Film instability (Eq. 8): the smaller of the two film holdups that satisfy it is used.  If
+//     there is none, the film holdup at the closest approach is used, which makes the bridging test
+//     of Eq. 12 fail, so the flow is not annular.
+
+export const ANS_SLUG_LENGTH = 30.0;    // liquid slug length in pipe diameters (the paper's C' = 30)
+export const ANS_SLUG_RISE = 0.35;      // Taylor bubble rise coefficient of Eq. 34
+export const ANS_BUBBLE_RISE = 1.53;    // bubble swarm coefficient of Eqs. 3, 21, 35
+export const ANS_FILM_BRIDGE = 0.12;    // minimum liquid fraction that can bridge the pipe (Eq. 7, 12)
+export const ANS_DEV_BLEND = 1.5;       // L_c / L_TB at which the developing slug equations (Eq. 62) fully
+                                        // replace the developed ones (Eq. 60).  1.0 is where the paper
+                                        // switches between them; the two do not meet there, so they are
+                                        // blended from 1.0 to this value.  NOT in the paper.
+
+/**
+ * Weight of the developing slug equations, 0 at ratio = 1 and 1 at ratio = ANS_DEV_BLEND, with a
+ * smooth (zero-slope) start and finish, so the pressure gradient has no step and no kink where the
+ * two meet.
+ * @param {number} ratio
+ */
+export function ansBlend(ratio) {
+  if (ratio <= 1.0) return 0.0;
+  if (ratio >= ANS_DEV_BLEND) return 1.0;
+  const x = (ratio - 1.0) / (ANS_DEV_BLEND - 1.0);
+  return x * x * (3.0 - 2.0 * x);                 // smoothstep
+}
+
+/**
+ * Root of fn between lo and hi by halving (fn(lo) and fn(hi) must have opposite signs).
+ * @param {(x: number) => number} fn @param {number} lo @param {number} hi @param {number} [n]
+ */
+function ansBisect(fn, lo, hi, n = 200) {
+  let f_lo = fn(lo);
+  for (let i = 0; i < n; i++) {
+    const mid = 0.5 * (lo + hi);
+    const f_mid = fn(mid);
+    if ((f_mid > 0) === (f_lo > 0)) {
+      lo = mid;
+      f_lo = f_mid;
+    } else {
+      hi = mid;
+    }
+    if (hi - lo < 1e-14) break;
+  }
+  return 0.5 * (lo + hi);
+}
+
+/**
+ * Barnea film instability, Eq. 8:  Y_M = (2 - 1.5 H)/(H^3 (1 - 1.5 H)) X_M^2, solved for the film
+ * holdup H.  The right-hand side has one minimum between H = 0 and 2/3.  Returns the smaller root;
+ * if Y_M is below that minimum (no root) it returns the holdup at the minimum.
+ * @param {number} y_m @param {number} x_m2
+ */
+export function ansFilmInstability(y_m, x_m2) {
+  const shape = (/** @type {number} */ h) => (2.0 - 1.5 * h) / (h ** 3 * (1.0 - 1.5 * h));
+  let lo = 1e-6;
+  let hi = 2.0 / 3.0 - 1e-6;
+  for (let i = 0; i < 200; i++) {                 // golden-section search for the minimum of shape(h)
+    const m1 = lo + 0.382 * (hi - lo);
+    const m2 = lo + 0.618 * (hi - lo);
+    if (shape(m1) < shape(m2)) hi = m2;
+    else lo = m1;
+  }
+  const h_min = 0.5 * (lo + hi);
+  const target = x_m2 > 0 ? y_m / x_m2 : Infinity;
+  if (target <= shape(h_min)) return h_min;
+  return ansBisect((h) => shape(h) - target, 1e-9, h_min);
+}
+
+/**
+ * Entrainment and core properties of annular flow (Eqs. 69 - 72, 87 - 90): the entrained fraction
+ * F_E, the no-slip liquid fraction of the core, its density and viscosity, its superficial velocity,
+ * the friction factor and the superficial pressure gradient of the core (lbf/ft2/ft).
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} rho_g
+ * @param {number} mu_l @param {number} mu_g @param {number} sigma @param {number} d_ft
+ * @param {number} eps_d
+ */
+export function ansCore(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d) {
+  const v_crit = 1.0e4 * v_sg * (mu_g / RE_CONST) / sigma * Math.sqrt(rho_g / rho_l);   // Eq. 72 (mu in lbm/ft/s)
+  const f_e = Math.max(1.0 - Math.exp(-0.125 * (v_crit - 1.5)), 0.0);                   // Eq. 71
+  const lam_lc = f_e * v_sl / (v_sg + f_e * v_sl);                                      // Eq. 70
+  const rho_c = rho_l * lam_lc + rho_g * (1.0 - lam_lc);                                // Eq. 69
+  const mu_c = mu_l * lam_lc + mu_g * (1.0 - lam_lc);                                   // Eq. 90
+  const v_sc = f_e * v_sl + v_sg;                                                       // Eq. 89
+  const re_sc = RE_CONST * rho_c * v_sc * d_ft / mu_c;                                  // Eq. 88
+  const f_sc = friction_factor(re_sc, eps_d);
+  const dpdl_sc = f_sc * rho_c * v_sc ** 2 / (2.0 * d_ft * GC);                         // Eq. 87
+  return { f_e, lam_lc, rho_c, mu_c, v_sc, re_sc, f_sc, dpdl_sc };
+}
+
+/**
+ * Dimensionless film thickness (film thickness / diameter) of annular flow and the gradient, by
+ * solving the momentum balance of the film and the core (Eqs. 91 - 93, written here as one equation
+ * for delta).  Returns the core numbers of ansCore plus 'delta', 'dpdl' (lbf/ft2/ft),
+ * 'hydrostatic', 'friction', 'holdup' and 'f_f'.
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} rho_g
+ * @param {number} mu_l @param {number} mu_g @param {number} sigma @param {number} d_ft
+ * @param {number} eps_d @param {number} theta
+ */
+export function ans_annular_film_thickness(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, theta) {
+  const core = ansCore(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d);
+  const { f_e, rho_c, dpdl_sc } = core;
+  const re_sl = RE_CONST * rho_l * v_sl * d_ft / mu_l;                                  // Eq. 80
+  const f_sl = friction_factor(re_sl, eps_d);
+  const dpdl_sl = f_sl * rho_l * v_sl ** 2 / (2.0 * d_ft * GC);                         // Eq. 79
+  const re_f = RE_CONST * rho_l * v_sl * (1.0 - f_e) * d_ft / mu_l;                     // Eq. 74 (no delta in it)
+  const f_f = friction_factor(Math.max(re_f, 1.0), eps_d);
+  const sin_t = Math.sin(theta);
+  const drive = (rho_l - rho_c) * sin_t;                       // (rho_L - rho_C) g sin(theta) / gc
+
+  const z_factor = (/** @type {number} */ delta) => {                                   // Eqs. 84, 85
+    if (f_e > 0.9) return 1.0 + 300.0 * delta;
+    return 1.0 + 24.0 * (rho_l / rho_g) ** (1.0 / 3.0) * delta;
+  };
+
+  const residual = (/** @type {number} */ delta) => {                                   // Eq. 93
+    const film = 4.0 * delta * (1.0 - delta);
+    return (z_factor(delta) * dpdl_sc / (film * (1.0 - 2.0 * delta) ** 5) - drive
+            - (1.0 - f_e) ** 2 * (f_f / f_sl) * dpdl_sl / film ** 3);
+  };
+
+  // The balance can have more than one root; the first one met from the thin-film side is the
+  // physical film.  (residual -> minus infinity as delta -> 0 and plus infinity as delta -> 0.5.)
+  /** @type {number[]} */
+  const grid = [];
+  for (let i = 0; i <= 400; i++) grid.push(1e-7 * (0.5 / 1e-7) ** (i / 400.0));
+  /** @type {number | null} */
+  let delta = null;
+  for (let i = 0; i < grid.length - 1; i++) {
+    const lo = grid[i];
+    const hi = grid[i + 1];
+    if (residual(lo) < 0.0 && 0.0 <= residual(hi)) {
+      delta = ansBisect(residual, lo, hi);
+      break;
+    }
+  }
+  if (delta === null) delta = ansBisect(residual, 1e-9, 0.5 - 1e-9);
+  const dpdl = z_factor(delta) * dpdl_sc / (1.0 - 2.0 * delta) ** 5 + rho_c * sin_t;    // Eq. 91 / 102
+  const hydrostatic = rho_c * sin_t;
+  const holdup = 4.0 * delta * (1.0 - delta) + core.lam_lc * (1.0 - 2.0 * delta) ** 2;
+  return { ...core, delta, dpdl, hydrostatic, friction: dpdl - hydrostatic, holdup,
+           f_f, f_sl, dpdl_sl, drive, residual_at_root: residual(delta) };
+}
+
+/**
+ * The flow pattern by the paper's boundaries (Eqs. 1 - 12).  v_sl > 0 and v_sg > 0 are expected, and
+ * sigma is in lbm/s2.  Returns the regime ('bubble', 'dispersed', 'slug' or 'annular') and the
+ * numbers used: v_s (Eq. 3), d_min (Eq. 1), v_sg_a (Eq. 2), v_sg_d (Eq. 6), h_lf, core_liquid.
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} rho_g
+ * @param {number} mu_l @param {number} mu_g @param {number} sigma @param {number} d_ft
+ * @param {number} eps_d @param {number} theta
+ */
+export function ans_flow_pattern(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, theta) {
+  const v_m = v_sl + v_sg;
+  const d_rho = rho_l - rho_g;
+  const v0 = (GC * sigma * d_rho / rho_l ** 2) ** 0.25;
+  const v_s = ANS_BUBBLE_RISE * v0;                                                     // Eq. 3
+  const d_min = 19.01 * Math.sqrt(d_rho * sigma / (rho_l ** 2 * GC));                   // Eq. 1
+  const v_sg_a = 0.25 * v_s + 0.333 * v_sl;                                             // Eq. 2 (transition A)
+  const v_sg_d = 3.1 * (GC * sigma * d_rho / rho_g ** 2) ** 0.25;                       // Eq. 6 (transition D)
+  /** @type {{regime: string, v_s: number, d_min: number, v_sg_a: number, v_sg_d: number,
+   *          h_lf: number | null, core_liquid: number | null,
+   *          annular?: ReturnType<typeof ans_annular_film_thickness>}} */
+  const info = { regime: "slug", v_s, d_min, v_sg_a, v_sg_d, h_lf: null, core_liquid: null };
+
+  // annular flow: fast enough gas AND a film too thin to bridge the pipe (Barnea, Eqs. 7 - 15)
+  if (v_sg > v_sg_d) {
+    const core = ansCore(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d);
+    const re_sl = RE_CONST * rho_l * v_sl * d_ft / mu_l;
+    const f_sl = friction_factor(re_sl, eps_d);
+    const dpdl_sl = f_sl * rho_l * v_sl ** 2 / (2.0 * d_ft * GC);
+    const f_f = friction_factor(Math.max(RE_CONST * rho_l * v_sl * (1.0 - core.f_e) * d_ft / mu_l, 1.0), eps_d);
+    const b = (1.0 - core.f_e) ** 2 * f_f / f_sl;
+    const x_m2 = b * dpdl_sl / core.dpdl_sc;                                            // X_M squared (Eq. 9)
+    const y_m = (rho_l - core.rho_c) * Math.sin(theta) / core.dpdl_sc;                  // Eq. 10
+    const h_lf = ansFilmInstability(y_m, x_m2);
+    const core_liquid = core.lam_lc * (1.0 - h_lf);          // lambda_LC A_C/A_p, with A_C/A_p = 1 - H_LF
+    info.h_lf = h_lf;
+    info.core_liquid = core_liquid;
+    if (h_lf + core_liquid <= ANS_FILM_BRIDGE) {                                        // Eq. 12 not satisfied
+      // The film that the annular model really finds must not bridge the pipe either.  Just above
+      // the boundary of Eq. 6 the gas can be too slow to hold the film up; the model then gives a
+      // thick film (more liquid than Eq. 12 allows) and the flow is slug, not annular.
+      const an = ans_annular_film_thickness(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, theta);
+      if (an.holdup <= ANS_FILM_BRIDGE) {
+        info.regime = "annular";
+        info.annular = an;
+        return info;
+      }
+    }
+  }
+
+  // dispersed bubble: turbulence breaks the bubbles up (Eq. 4) and the gas fraction is below 0.76 (Eq. 5)
+  if (v_sg <= 3.17 * v_sl) {
+    const f_m = friction_factor(RE_CONST * rho_l * v_m * d_ft / mu_l, eps_d);
+    const lhs = (2.0 * (0.4 * sigma / (d_rho * GC)) ** 0.5 * (rho_l / sigma) ** 0.6
+                 * (f_m / (2.0 * d_ft)) ** 0.4 * v_m ** 1.2);
+    const rhs = 0.725 + 4.15 * Math.sqrt(v_sg / v_m);
+    if (lhs >= rhs) {
+      info.regime = "dispersed";
+      return info;
+    }
+  }
+
+  // bubble flow: wide enough pipe and a low gas rate (Eqs. 1, 2)
+  if (d_ft >= d_min && v_sg <= v_sg_a) {
+    info.regime = "bubble";
+    return info;
+  }
+  info.regime = "slug";
+  return info;
+}
+
+/**
+ * Liquid holdup of bubble flow from Eq. 22:
+ *   1.53 [g sigma d_rho / rho_L^2]^0.25 H^0.5 = v_Sg/(1 - H) - 1.2 v_m
+ * @param {number} v_sl @param {number} v_sg @param {number} v0
+ */
+export function ansBubbleHoldup(v_sl, v_sg, v0) {
+  const v_m = v_sl + v_sg;
+  return ansBisect((h) => v_sg / (1.0 - h) - 1.2 * v_m - ANS_BUBBLE_RISE * v0 * Math.sqrt(h),
+                   1e-9, 1.0 - 1e-12);
+}
+
+/**
+ * The slug flow model (Eqs. 29 - 66).  Returns the slug unit variables, its elevation density
+ * (lb/ft3, to be multiplied by sin(theta)) and its friction gradient (lbf/ft2/ft).
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} rho_g
+ * @param {number} mu_l @param {number} mu_g @param {number} sigma @param {number} d_ft
+ * @param {number} eps_d
+ */
+export function ansSlug(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d) {
+  const v_m = v_sl + v_sg;
+  const d_rho = rho_l - rho_g;
+  const v0 = (GC * sigma * d_rho / rho_l ** 2) ** 0.25;
+  const v_tb = 1.2 * v_m + ANS_SLUG_RISE * Math.sqrt(GC * d_ft * d_rho / rho_l);        // Eq. 34
+  const h_gls = v_sg / (0.425 + 2.65 * v_m);                                            // Eq. 38
+  const h_lls = 1.0 - h_gls;
+  const v_gls = 1.2 * v_m + ANS_BUBBLE_RISE * v0 * Math.sqrt(h_lls);                    // Eq. 35
+
+  // Eq. 37 with H_gTB = 1 - H_LTB
+  const v_ltb_of = (/** @type {number} */ h_ltb) =>
+    9.916 * Math.sqrt(GC * d_ft * (1.0 - Math.sqrt(1.0 - h_ltb)));
+
+  // The eight equations 29 - 35, 37, 38 reduce to one equation in H_LTB (Vo and Shoham).  Equations
+  // 32 and 33 make the flux of liquid plus gas equal in the Taylor bubble and in the liquid slug, and
+  // equations 29 + 30 say that flux is v_m; this gives (compare Eqs. 39 - 41):
+  //     v_LTB H_LTB - v_TB (1 - H_LTB - H_gLS) + (v_m - v_gLS H_gLS) = 0
+  const residual = (/** @type {number} */ h_ltb) =>
+    v_ltb_of(h_ltb) * h_ltb - v_tb * (1.0 - h_ltb - h_gls) + (v_m - v_gls * h_gls);
+
+  const lo = 1e-9;
+  const hi = 1.0 - 1e-9;
+  let h_ltb;
+  if (residual(lo) >= 0.0) h_ltb = lo;
+  else if (residual(hi) <= 0.0) h_ltb = hi;
+  else h_ltb = ansBisect(residual, lo, hi);
+
+  const h_gtb = 1.0 - h_ltb;
+  const v_ltb = v_ltb_of(h_ltb);
+  const v_lls = v_tb - (v_tb + v_ltb) * h_ltb / h_lls;                                  // Eq. 32
+  const v_gtb = v_tb - (v_tb - v_gls) * h_gls / h_gtb;                                  // Eq. 33
+  const denom = v_lls * h_lls + v_ltb * h_ltb;
+  let beta = denom > 0 ? (v_lls * h_lls - v_sl) / denom : 0.5;                           // Eq. 30
+  beta = Math.min(Math.max(beta, 1e-4), 0.999);
+  const l_ls = ANS_SLUG_LENGTH * d_ft;                                                   // Eq. 48
+  const l_tb = l_ls * beta / (1.0 - beta);                                               // Eq. 49
+
+  const rho_ls = rho_l * h_lls + rho_g * h_gls;                                          // Eq. 61
+  const mu_ls = mu_l * h_lls + mu_g * h_gls;
+  /** @type {{beta: number, h_ltb: number, h_gls: number, v_tb: number, v_gls: number,
+   *           v_ltb: number, v_lls: number, v_gtb: number, l_ls: number, l_tb: number,
+   *           developing: boolean, l_c: number | null, l_tb_star?: number, blend?: number}} */
+  const out = { beta, h_ltb, h_gls, v_tb, v_gls, v_ltb, v_lls, v_gtb, l_ls, l_tb,
+                developing: false, l_c: null };
+
+  // Developing or developed?  Compare the cap length of the Taylor bubble (Eq. 44) with its developed
+  // length.  The film at the end of the cap has the Nusselt thickness (Eqs. 45 - 47).
+  if (v_tb > v_gls) {
+    const mu_l_si = mu_l / RE_CONST;                                                     // lbm/ft/s
+
+    const nusselt = (/** @type {number} */ delta) => {        // delta = film thickness / d
+      const g_n = (1.0 - 2.0 * delta) ** 2;                   // gas fraction of the Taylor bubble section
+      const h_n = 1.0 - g_n;                                                             // Eq. 46
+      const v_ngtb = v_tb - (v_tb - v_gls) * h_gls / g_n;                                // Eq. 47
+      const v_nltb = (v_ngtb * g_n - v_m) / h_n;              // film velocity from the flux balance
+      return { h_n, v_ngtb, v_nltb };
+    };
+
+    const nusselt_residual = (/** @type {number} */ delta) => {                          // Eq. 45 cubed
+      const { h_n, v_nltb } = nusselt(delta);
+      return (delta * d_ft) ** 3 - 0.75 * d_ft * mu_l_si * v_nltb * h_n / (GC * d_rho);
+    };
+
+    if (nusselt_residual(1e-9) < 0.0 && 0.0 < nusselt_residual(0.5 - 1e-9)) {
+      const delta_n = ansBisect(nusselt_residual, 1e-9, 0.5 - 1e-9);
+      const { v_nltb } = nusselt(delta_n);
+      const l_c = (v_tb + v_nltb) ** 2 / (2.0 * GC);                                     // Eq. 44
+      out.l_c = l_c;
+      if (l_c >= l_tb) {
+        const a = 1.0 - v_sg / v_tb;                                                     // Eq. 55
+        const b = (v_sg - v_gls * h_gls) * l_ls / v_tb;                                  // Eqs. 52, 53
+        const cc = (v_tb - v_lls) * h_lls / Math.sqrt(2.0 * GC);                         // Eq. 57
+        const disc = cc * cc + a * b;
+        if (a > 1e-9 && disc >= 0.0) {
+          const x = (cc + Math.sqrt(disc)) / a;                     // = sqrt(L*_TB), Eq. 54
+          const l_star = x * x;
+          if (l_star > 0.0) {
+            out.developing = true;
+            out.l_tb_star = l_star;
+          }
+        }
+      }
+    }
+  }
+
+  // Developed (Eq. 60) and developing (Eq. 62) do not agree where they meet (at L_c = L_TB).  Eq. 60
+  // treats the Taylor bubble as pure gas; Eq. 62 counts the liquid film in it through rho_TBA.  The
+  // two therefore differ by about beta * rho_L * H_LTB, which here is roughly half the slug-unit
+  // density, and the model steps: on a gas-lifted well the VLP curve jumped about 50 psi between two
+  // neighbouring rates, enough to move the operating point.  Both of the paper's expressions are
+  // kept, and they are blended over 1 <= L_c/L_TB <= ANS_DEV_BLEND so that the gradient is
+  // continuous: at the switch the weight is 0, so the developed equations (which reproduce
+  // Orkiszewski's measured well 22 best) still apply, and the developing equations take over once the
+  // Taylor bubble is clearly shorter than its own cap.
+  // THIS BLEND IS A DEVIATION FROM THE PAPER (see the README); its two end points are the paper's own.
+  const rho_dev = (1.0 - beta) * rho_ls + beta * rho_g;                                  // Eq. 60
+  const holdup_dev = (1.0 - beta) * h_lls + beta * h_ltb;
+  let rho_elev = rho_dev;
+  let beta_f = beta;
+  let holdup = holdup_dev;
+  if (out.developing) {
+    const l_star = /** @type {number} */ (out.l_tb_star);
+    const beta_e = l_star / (l_star + l_ls);                        // beta* = L*_TB / L*_SU
+    const h_ltba = Math.min(2.0 * (v_tb - v_lls) * h_lls / Math.sqrt(2.0 * GC * l_star), 1.0);  // Eq. 64
+    const rho_tba = rho_l * h_ltba + rho_g * (1.0 - h_ltba);                             // Eq. 63
+    const rho_ing = (1.0 - beta_e) * rho_ls + beta_e * rho_tba;                          // Eq. 62
+    const holdup_ing = (1.0 - beta_e) * h_lls + beta_e * h_ltba;
+    const w = l_tb > 0.0 ? ansBlend(/** @type {number} */ (out.l_c) / l_tb) : 1.0;
+    out.blend = w;
+    rho_elev = (1.0 - w) * rho_dev + w * rho_ing;
+    beta_f = (1.0 - w) * beta + w * beta_e;
+    holdup = (1.0 - w) * holdup_dev + w * holdup_ing;
+  }
+  const re_ls = RE_CONST * rho_ls * v_m * d_ft / mu_ls;                                  // Eq. 66
+  const f_ls = friction_factor(re_ls, eps_d);
+  const friction = f_ls * rho_ls * v_m ** 2 / (2.0 * d_ft * GC) * (1.0 - beta_f);        // Eq. 65
+  return { ...out, rho_elev, friction, f: f_ls, re: re_ls, holdup };
+}
+
+/**
+ * Ansari et al. (1994) pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient.  The result has 'dpdl', 'hl' (liquid holdup of the pattern), 'regime'
+ * ('bubble', 'dispersed', 'slug', 'annular', 'liquid' or 'gas'), 'hydrostatic', 'friction', 'f_tp',
+ * 're', 'e_k' (always 0: the paper has no acceleration term) and, for slug flow, 'beta' (the Taylor
+ * bubble fraction of the slug unit) and 'developing' (true while the Taylor bubble is still growing).
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ */
+export function ansari_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl;
+  const v_sg = c.v_sg;
+  const v_m = v_sl + v_sg;
+  check(v_m > 0, "No flow: mixture velocity is zero.");
+  const theta = radians(angle_deg);
+  const sin_t = Math.sin(theta);
+  const { rho_l, rho_g, mu_l, mu_g } = c;
+  const sigma = c.sigma * GRAY_SIGMA_UNIT;                  // lbm/s2
+  const eps_d = roughness_in / d_in;
+
+  let regime;
+  let hl;
+  let fric;
+  let hydro;
+  /** @type {{f?: number, re?: number, beta?: number, developing?: boolean, delta?: number}} */
+  let extra = {};
+
+  if (v_sg < 1e-9 * v_m) {                                  // liquid only
+    regime = "liquid";
+    hl = 1.0;
+    const re = RE_CONST * rho_l * v_m * d_ft / mu_l;
+    const f = friction_factor(re, eps_d);
+    fric = f * rho_l * v_m ** 2 / (2.0 * d_ft * GC);
+    extra = { f, re };
+    hydro = rho_l * sin_t;
+  } else if (v_sl < 1e-9 * v_m) {                           // gas only
+    regime = "gas";
+    hl = 0.0;
+    const re = RE_CONST * rho_g * v_m * d_ft / mu_g;
+    const f = friction_factor(re, eps_d);
+    fric = f * rho_g * v_m ** 2 / (2.0 * d_ft * GC);
+    extra = { f, re };
+    hydro = rho_g * sin_t;
+  } else {
+    const fp = ans_flow_pattern(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, theta);
+    regime = fp.regime;
+    if (regime === "bubble" || regime === "dispersed") {
+      if (regime === "bubble") {
+        const v0 = (GC * sigma * (rho_l - rho_g) / rho_l ** 2) ** 0.25;
+        hl = ansBubbleHoldup(v_sl, v_sg, v0);                                            // Eq. 22
+      } else {
+        hl = v_sl / v_m;                                                                 // Eq. 19 (no slip)
+      }
+      const rho = rho_l * hl + rho_g * (1.0 - hl);                                       // Eqs. 16, 23
+      const mu = mu_l * hl + mu_g * (1.0 - hl);                                          // Eqs. 17, 24
+      const re = RE_CONST * rho * v_m * d_ft / mu;                                       // Eq. 28
+      const f = friction_factor(re, eps_d);
+      fric = f * rho * v_m ** 2 / (2.0 * d_ft * GC);                                     // Eq. 27
+      hydro = rho * sin_t;                                                               // Eq. 26
+      extra = { f, re };
+    } else if (regime === "slug") {
+      const sl = ansSlug(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d);
+      hl = sl.holdup;
+      fric = sl.friction;
+      hydro = sl.rho_elev * sin_t;
+      extra = { f: sl.f, re: sl.re, beta: sl.beta, developing: sl.developing };
+    } else {
+      const an = fp.annular
+        || ans_annular_film_thickness(v_sl, v_sg, rho_l, rho_g, mu_l, mu_g, sigma, d_ft, eps_d, theta);
+      hl = an.holdup;
+      fric = an.friction;
+      hydro = an.hydrostatic;
+      extra = { f: an.f_sc, re: an.re_sc, delta: an.delta };
+    }
+  }
+  return { dpdl: (hydro + fric) / 144.0, hl, regime, hydrostatic: hydro / 144.0,
+           friction: fric / 144.0, f_tp: extra.f ?? 0.0, re: extra.re ?? 0.0, e_k: 0.0,
+           beta: extra.beta ?? null, developing: extra.developing ?? null,
+           delta: extra.delta ?? null };
+}
+
+// =====================================================================
 // Duns and Ros (1963) - "Vertical flow of gas and liquid mixtures in wells"
 // =====================================================================
 // Duns, H. Jr. and Ros, N.C.J., Proc. 6th World Petroleum Congress, Frankfurt, 1963,
@@ -1052,4 +1513,328 @@ export function duns_ros_gradient(p, angle_deg, d_in, roughness_in, c) {
   }
   return { dpdl: (hydrostatic + friction) / (1.0 - e_k), hl: h, regime,
            hydrostatic, friction, f_tp: f_used, re, e_k, rn: fp.rn, n: fp.n };
+}
+
+// =====================================================================
+// Mukherjee & Brill (1983 / 1985) - holdup and pressure drop for inclined two-phase flow
+// =====================================================================
+// Mukherjee, H. and Brill, J.P., "Liquid Holdup Correlations for Inclined Two-Phase Flow",
+// J. Pet. Tech., May 1983, p. 1003 (SPE 10923).  This paper gives the HOLDUP equation (Eq. 1) and
+// its coefficients (Table 1):
+//     H_L = exp[ (c1 + c2 sin(a) + c3 sin(a)^2 + c4 N_L^2) * N_gv^c5 / N_Lv^c6 ]
+// with one set of c1 ... c6 for uphill and horizontal flow (all flow patterns), one for downhill
+// stratified flow and one for the other downhill patterns.  N_Lv, N_gv and N_L are the same
+// dimensionless numbers as in Duns & Ros and Hagedorn & Brown.
+//
+// The flow-pattern map and the friction method are from the two companion papers:
+//   Mukherjee, H. and Brill, J.P., "Empirical Equations to Predict Flow Patterns in Two-Phase
+//       Inclined Flow", Int. J. Multiphase Flow 11 (3), 1985, p. 299: Eqs. [1]-[4] and Fig. 16;
+//   Mukherjee, H. and Brill, J.P., "Pressure Drop Correlations for Inclined Two-Phase Flow",
+//       J. Energy Resources Technology 107, Dec. 1985, p. 549: Eqs. (1)-(27), Table 2.
+//
+//     flow pattern   uphill (angle > 0)           downhill and horizontal (angle <= 0)
+//     annular-mist   N_gv > N_gv(SM)              N_gv > N_gv(SM)
+//     bubble         N_Lv > N_Lv(BS)              N_gv <= N_gv(BS)  (and, for |angle| <= 30, N_Lv > N_Lv(ST))
+//     stratified     (none)                       N_Lv <= N_Lv(ST)  (steeper than 30 degrees: N_gv > N_gv(BS) too)
+//     slug           the rest                     the rest
+//
+//     friction       bubble, slug : Moody factor at the no-slip Reynolds number, on the slip density
+//                    annular-mist : the same factor times f_R(H_R), H_R = no-slip holdup / holdup,
+//                                   applied to the no-slip density
+//                    stratified   : Eq. 15, the momentum balance of the gas on a flat interface.  The
+//                                   paper's "smooth interface" has no interfacial shear formula, so it
+//                                   is neglected.  No acceleration.
+//
+// Printed Eqs. 26-27 write the wall shear as f*gamma*v^2/(2g) with a MOODY factor f, which is four
+// times the usual Fanning shear f*rho*v^2/8; the Darcy-Weisbach pressure drop of Eq. 2 only comes out
+// right with the /8 form, so that is what is coded here.
+
+/** (c1 ... c6) of Table 1 */
+export const MB_COEFFICIENTS = {
+  uphill: [-0.380113, 0.129875, -0.119788, 2.343227, 0.475686, 0.288657],
+  downhill_stratified: [-1.330282, 4.808139, 4.171584, 56.262268, 0.079951, 0.504887],
+  downhill_other: [-0.516644, 0.789805, 0.551627, 15.519214, 0.371771, 0.393952],
+};
+
+/** Annular-mist friction ratio f_R against H_R = (no-slip holdup) / (holdup)  (1985 paper, tabulated) */
+export const MB_FRICTION_RATIO = [[0.01, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0, 10.0],
+                                  [1.00, 0.98, 1.20, 1.25, 1.30, 1.25, 1.00, 1.00]];
+
+/**
+ * Liquid velocity number N_Lv, gas velocity number N_gv and liquid viscosity number N_L (field units).
+ * @param {number} v_sl @param {number} v_sg @param {number} rho_l @param {number} sigma @param {number} mu_l
+ */
+export function mb_numbers(v_sl, v_sg, rho_l, sigma, mu_l) {
+  const f_v = 1.938 * (rho_l / sigma) ** 0.25;
+  return { n_lv: f_v * v_sl, n_gv: f_v * v_sg,
+           n_l: 0.15726 * mu_l * (1.0 / (rho_l * sigma ** 3)) ** 0.25 };
+}
+
+/**
+ * Flow pattern of the Mukherjee & Brill map (Fig. 16 of the flow-pattern paper): 'annular', 'bubble',
+ * 'slug' or 'stratified' (downhill or horizontal only).  Needs N_lv > 0 and N_gv > 0.  The boundaries
+ * that do not apply are null.
+ * @param {number} n_lv @param {number} n_gv @param {number} n_l @param {number} angle_deg
+ */
+export function mb_flow_pattern(n_lv, n_gv, n_l, angle_deg) {
+  const sin_a = Math.sin(radians(angle_deg));
+  const n_gv_sm = 10.0 ** (1.401 - 2.694 * n_l + 0.521 * n_lv ** 0.329);
+  /** @type {{n_gv_sm: number, n_lv_bs: number | null, n_gv_bs: number | null,
+   *          n_lv_st: number | null, regime?: string}} */
+  const out = { n_gv_sm, n_lv_bs: null, n_gv_bs: null, n_lv_st: null };
+  if (angle_deg > 0.0) {              // uphill only; horizontal follows the downhill branch
+    out.n_lv_bs = 10.0 ** (Math.log10(n_gv) + 0.940 + 0.074 * sin_a - 0.855 * sin_a ** 2 + 3.695 * n_l);
+  } else {
+    const log_lv = Math.log10(n_lv);
+    out.n_gv_bs = 10.0 ** (0.431 - 3.003 * n_l - 1.138 * log_lv * sin_a
+                           - 0.429 * log_lv ** 2 * sin_a + 1.132 * sin_a);
+    out.n_lv_st = 10.0 ** (0.321 - 0.017 * n_gv - 4.267 * sin_a - 2.972 * n_l
+                           - 0.033 * Math.log10(n_gv) ** 2 - 3.925 * sin_a ** 2);
+  }
+  let regime;
+  if (n_gv > n_gv_sm) {
+    regime = "annular";
+  } else if (angle_deg > 0.0) {
+    regime = n_lv > /** @type {number} */ (out.n_lv_bs) ? "bubble" : "slug";
+  } else if (Math.abs(angle_deg) > 30.0) {
+    if (n_gv > /** @type {number} */ (out.n_gv_bs)) {
+      regime = n_lv > /** @type {number} */ (out.n_lv_st) ? "slug" : "stratified";
+    } else {
+      regime = "bubble";
+    }
+  } else if (n_lv > /** @type {number} */ (out.n_lv_st)) {
+    regime = n_gv > /** @type {number} */ (out.n_gv_bs) ? "slug" : "bubble";
+  } else {
+    regime = "stratified";
+  }
+  out.regime = regime;
+  return out;
+}
+
+/**
+ * Liquid holdup of Mukherjee & Brill, Eq. 1 with the coefficients of Table 1 (kept between 0 and 1).
+ * regime is only needed for downhill flow (stratified or not).
+ * @param {number} n_lv @param {number} n_gv @param {number} n_l @param {number} angle_deg @param {string} regime
+ */
+export function mb_holdup(n_lv, n_gv, n_l, angle_deg, regime) {
+  const c = angle_deg >= 0.0
+    ? MB_COEFFICIENTS.uphill
+    : (regime === "stratified" ? MB_COEFFICIENTS.downhill_stratified : MB_COEFFICIENTS.downhill_other);
+  const sin_a = Math.sin(radians(angle_deg));
+  const t1 = c[0] + c[1] * sin_a + c[2] * sin_a ** 2 + c[3] * n_l ** 2;
+  const x = t1 * n_gv ** c[4] / n_lv ** c[5];
+  return x >= 0.0 ? 1.0 : Math.exp(Math.max(x, -700.0));   // a positive exponent would give H_L > 1
+}
+
+/**
+ * Angle delta (radians, 0 to 2 pi) of the liquid-wetted part of the wall for a flat liquid layer of
+ * holdup H_L:  (delta - sin delta) / (2 pi) = H_L, found by halving the interval.
+ * @param {number} h_l
+ */
+export function mb_stratified_angle(h_l) {
+  let lo = 0.0;
+  let hi = 2.0 * Math.PI;
+  for (let i = 0; i < 100; i++) {
+    const mid = 0.5 * (lo + hi);
+    if ((mid - Math.sin(mid)) / (2.0 * Math.PI) < h_l) lo = mid;
+    else hi = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+/**
+ * Friction gradient (lbf/ft2 per ft) of stratified flow, Eq. 15 of the 1985 pressure-drop paper with
+ * the interface shear neglected (smooth interface): the wall shear of the gas over its wetted wall,
+ * divided by the area of the gas.
+ *     friction = tau_wg * P_g / A_g,     tau_wg = f_g * rho_g * v_g^2 / (8 g_c)
+ * The gas runs at v_g = v_sg / (1 - H_L) and its Reynolds number uses the hydraulic diameter D_Eg of
+ * Eq. 25.  Returns [friction, extras].
+ * @param {number} h_l @param {number} v_sg @param {number} rho_g @param {number} mu_g
+ * @param {number} d_ft @param {number} eps_d
+ * @returns {[number, {f: number, re: number, delta: number}]}
+ */
+export function mb_stratified_friction(h_l, v_sg, rho_g, mu_g, d_ft, eps_d) {
+  const h = Math.min(Math.max(h_l, 1e-6), 1.0 - 1e-6);
+  const delta = mb_stratified_angle(h);                                            // Eq. 20, solved for delta
+  const d_eg = d_ft * (2.0 * Math.PI - (delta - Math.sin(delta)))
+                    / (2.0 * Math.PI - delta + 2.0 * Math.sin(0.5 * delta));       // Eq. 25
+  const v_g = v_sg / (1.0 - h);
+  const re_g = RE_CONST * rho_g * v_g * d_eg / mu_g;
+  const f_g = friction_factor(re_g, eps_d);
+  const tau_g = f_g * rho_g * v_g ** 2 / (8.0 * GC);
+  const perimeter = Math.PI * d_ft;
+  const p_g = (1.0 - delta / (2.0 * Math.PI)) * perimeter;                         // Eq. 23
+  const a_g = (1.0 - h) * Math.PI * d_ft ** 2 / 4.0;                               // Eq. 21
+  return [tau_g * p_g / a_g, { f: f_g, re: re_g, delta }];
+}
+
+/**
+ * Mukherjee & Brill pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient.  Works for any angle: uphill, horizontal and downhill.  The result has
+ * 'dpdl', 'hl', 'regime' ('bubble', 'slug', 'annular', 'stratified', or 'liquid' / 'gas' for one
+ * phase only), 'hydrostatic', 'friction', 'f_tp' (the Moody factor used), 're', 'e_k' and the three
+ * dimensionless numbers 'n_lv', 'n_gv', 'n_l'.
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ */
+export function mukherjee_brill_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl;
+  const v_sg = c.v_sg;
+  const v_m = v_sl + v_sg;
+  check(v_m > 0, "No flow: mixture velocity is zero.");
+  const sin_a = Math.sin(radians(angle_deg));
+  const { rho_l, rho_g, mu_l, mu_g, sigma } = c;
+  const eps_d = roughness_in / d_in;
+  const nm = mb_numbers(v_sl, v_sg, rho_l, sigma, mu_l);
+
+  if (v_sl < 1e-9 * v_m || v_sg < 1e-9 * v_m) {                    // one phase only
+    const gas = v_sl < 1e-9 * v_m;
+    const rho = gas ? rho_g : rho_l;
+    const mu = gas ? mu_g : mu_l;
+    const v = gas ? v_sg : v_sl;
+    const re = RE_CONST * rho * v * d_ft / mu;
+    const f = friction_factor(re, eps_d);
+    const hydrostatic = rho * sin_a / 144.0;
+    const friction = f * rho * v ** 2 / (2.0 * GC * d_ft) / 144.0;
+    const e_k = gas ? Math.min(rho * v * v / (GC * p * 144.0), 0.95) : 0.0;
+    return { dpdl: (hydrostatic + friction) / (1.0 - e_k), hl: gas ? 0.0 : 1.0,
+             regime: gas ? "gas" : "liquid", hydrostatic, friction,
+             f_tp: f, re, e_k, ...nm };
+  }
+
+  const fp = mb_flow_pattern(nm.n_lv, nm.n_gv, nm.n_l, angle_deg);
+  const regime = /** @type {string} */ (fp.regime);
+  const h_l = mb_holdup(nm.n_lv, nm.n_gv, nm.n_l, angle_deg, regime);
+  const lam = v_sl / v_m;                                          // no-slip holdup
+  let rho_s = h_l * rho_l + (1.0 - h_l) * rho_g;                    // slip (holdup) density
+  const rho_ns = lam * rho_l + (1.0 - lam) * rho_g;
+  const mu_ns = lam * mu_l + (1.0 - lam) * mu_g;
+  const re_ns = RE_CONST * rho_ns * v_m * d_ft / mu_ns;
+  let friction;
+  let f_used;
+  let re_used;
+  if (regime === "stratified") {
+    const [fr, extra] = mb_stratified_friction(h_l, v_sg, rho_g, mu_g, d_ft, eps_d);
+    friction = fr;
+    f_used = extra.f;
+    re_used = extra.re;
+    rho_s = rho_g;                                                 // Eq. 15: the weight of the gas column only
+  } else {
+    const f_ns = friction_factor(re_ns, eps_d);
+    if (regime === "annular") {
+      const [xs, ys] = MB_FRICTION_RATIO;
+      const h_r = Math.min(Math.max(lam / Math.max(h_l, 1e-9), xs[0]), xs[xs.length - 1]);
+      // the same index Python's bisect.bisect_right(xs, h_r) - 1 gives
+      let i = 0;
+      while (i < xs.length && xs[i] <= h_r) i += 1;
+      i = Math.min(Math.max(i - 1, 0), xs.length - 2);
+      const f_r = ys[i] + (ys[i + 1] - ys[i]) * (h_r - xs[i]) / (xs[i + 1] - xs[i]);  // straight line in H_R
+      f_used = f_ns * f_r;
+      friction = f_used * rho_ns * v_m ** 2 / (2.0 * GC * d_ft);
+    } else {
+      f_used = f_ns;
+      friction = f_ns * rho_s * v_m ** 2 / (2.0 * GC * d_ft);
+    }
+    re_used = re_ns;
+  }
+  const hydrostatic = rho_s * sin_a / 144.0;
+  friction = friction / 144.0;
+  // no acceleration in stratified flow
+  const e_k = regime === "stratified" ? 0.0 : Math.min(rho_s * v_m * v_sg / (GC * p * 144.0), 0.95);
+  return { dpdl: (hydrostatic + friction) / (1.0 - e_k), hl: h_l, regime, hydrostatic,
+           friction, f_tp: f_used, re: re_used, e_k, ...nm };
+}
+
+// =====================================================================
+// Fancher & Brown (1963) - the no-slip "lowest possible VLP"
+// =====================================================================
+// Fancher, G.H. Jr. and Brown, K.E., "Prediction of Pressure Gradients for Multiphase Flow in
+// Tubing", SPE Journal, March 1963, p. 59.
+//
+//     dp/dH = [ rho + f q^2 M^2 / (7.413e10 rho d^5) ] / 144                  (psi/ft; Eq. 2)
+//     N = 1.4737e-5 q M / d  (= rho v d, the numerator of the Reynolds number; q M is lb/day)
+//     f = Fanning friction factor read from Fig. 7 (GLR < 1500 scf/bbl), Fig. 8 (1500 - 3000)
+//         or Fig. 9 (> 3000)
+//
+// The factor is a function of N and the GLR only: the viscosity, the pipe roughness and the angle are
+// not in it (the paper found viscous shear negligible).  There is no acceleration term, and no slip,
+// which is why it gives the LOWEST possible VLP: it belongs in the correlation comparison as a
+// quality check - a measured flowing pressure to the left of it means the PVT or the pressure data
+// are wrong - and not in a real calculation.
+//
+// The lines are chart readings (digitised from the paper's figures, about +/- 3 %).  Fig. 7 is a curve
+// (steep below N = 6, straight on log-log paper above); Figs. 8 and 9 are straight lines.  They are
+// drawn for N = 3.4 - 35 (GLR < 1500), 4.7 - 27 (1500 - 3000) and 3.7 - 15 (> 3000); the comparison
+// chart (Fig. 6) carries them to N = 70, 35 and 23, so each line is continued to there.  Beyond that
+// the factor is held at its end value (a straight line for ever would give a friction factor far
+// below a smooth pipe's), and below the start of the line it is held too.
+
+export const FB_GLR_LIMITS = [1500.0, 3000.0];   // scf per STB of liquid: where one line gives way to the next
+export const FB_N_MAX = { low: 70.0, mid: 35.0, high: 23.0 };   // the factor is held constant above this N
+
+/** (N, f) points of the three lines; between two points the factor is a straight line on log-log paper */
+export const FB_FRICTION_LINES = {
+  low: [[3.4, 0.259], [3.8, 0.188], [4.2, 0.145], [4.7, 0.111], [5.3, 0.087], [6.0, 0.0675],
+        [7.0, 10 ** (-0.26574 - 1.17775 * Math.log10(7.0))],
+        [50.0, 10 ** (-0.26574 - 1.17775 * Math.log10(50.0))]],
+  mid: [[4.7, 10 ** (-0.52769 - 1.12195 * Math.log10(4.7))],
+        [27.0, 10 ** (-0.52769 - 1.12195 * Math.log10(27.0))]],
+  high: [[3.7, 10 ** (-0.73798 - 1.26576 * Math.log10(3.7))],
+         [15.0, 10 ** (-0.73798 - 1.26576 * Math.log10(15.0))]],
+};
+
+/**
+ * Which of the paper's three lines applies: 'low' (GLR < 1500), 'mid' (1500 - 3000) or 'high' (> 3000).
+ * @param {number} glr
+ */
+export function fb_glr_band(glr) {
+  return glr < FB_GLR_LIMITS[0] ? "low" : (glr <= FB_GLR_LIMITS[1] ? "mid" : "high");
+}
+
+/**
+ * Fanning friction factor of Figs. 7-9 at N = rho v d (lb/s/ft) for a producing gas-liquid ratio glr
+ * (scf/STB).
+ * @param {number} n_re @param {number} glr
+ */
+export function fb_friction_factor(n_re, glr) {
+  check(n_re > 0, "The Fancher and Brown Reynolds numerator must be > 0.");
+  const band = fb_glr_band(glr);
+  const pts = FB_FRICTION_LINES[/** @type {"low"|"mid"|"high"} */ (band)];
+  const n = Math.min(Math.max(n_re, pts[0][0]), FB_N_MAX[/** @type {"low"|"mid"|"high"} */ (band)]);
+  // the segment to read: the one that holds n, or the first / last one when n is off the drawn line
+  let k = 0;
+  while (k < pts.length - 2 && n > pts[k + 1][0]) k += 1;
+  const [n1, f1] = pts[k];
+  const [n2, f2] = pts[k + 1];
+  const slope = Math.log(f2 / f1) / Math.log(n2 / n1);
+  return f1 * (n / n1) ** slope;
+}
+
+/**
+ * Pressure gradient (psi/ft, positive in the flow direction) from Eq. 2 of Fancher and Brown.
+ * c must also hold 'glr', the producing gas-liquid ratio (scf per STB of LIQUID, all the gas that
+ * reaches the surface including the dissolved and the injected gas).  Pressure and roughness are not
+ * used: the paper's friction factor depends on N and the GLR only.  The gravity part is
+ * rho sin(angle) with the no-slip density (the paper is for vertical wells; sin(90) = 1).
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ */
+export function fancher_brown_gradient(p, angle_deg, d_in, roughness_in, c) {
+  const v_sl = c.v_sl;
+  const v_sg = c.v_sg;
+  const d_ft = d_in / 12.0;
+  const area = Math.PI * d_ft ** 2 / 4.0;
+  const v_m = v_sl + v_sg;
+  const lam = v_m > 0 ? v_sl / v_m : 0.0;                            // no-slip liquid fraction
+  const rho = lam * c.rho_l + (1.0 - lam) * c.rho_g;                 // flowing (no-slip) density, lb/ft3
+  const mass_rate = (c.rho_l * v_sl + c.rho_g * v_sg) * area * 86400.0;  // q M of the paper, lb/day
+  const n_re = 1.4737e-5 * mass_rate / d_ft;                         // rho v d, lb/s/ft
+  const f = fb_friction_factor(n_re, c.glr);
+  const friction = f * mass_rate ** 2 / (7.413e10 * rho * d_ft ** 5) / 144.0;    // psi/ft
+  const hydrostatic = rho * Math.sin(radians(angle_deg)) / 144.0;
+  const mu_ns = lam * c.mu_l + (1.0 - lam) * c.mu_g;
+  return { dpdl: hydrostatic + friction, hl: lam, regime: "no-slip", hydrostatic,
+           friction, f_tp: f, re: RE_CONST * rho * v_m * d_ft / mu_ns, e_k: 0.0, glr: c.glr };
 }

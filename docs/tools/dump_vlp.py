@@ -209,6 +209,100 @@ def cases():
                                 10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
                                 random.uniform(1.0, 70.0))]))
 
+    # ---- Ansari et al. (1994) ----------------------------------------
+    # The four flow patterns, the two single-phase ends, and the developing/developed slug blend.
+    for v_sl in (0.0, 1e-9, 0.01, 0.2, 1.5, 6.0, 25.0):
+        for v_sg in (0.0, 1e-9, 0.02, 0.3, 3.0, 20.0, 120.0, 600.0):
+            if v_sl + v_sg <= 0:
+                continue
+            for angle in (90.0, 55.0, 15.0):            # the model is for upward flow
+                out.append(("ansari_gradient", "ansari_gradient",
+                            [1200.0, angle, 2.441, 0.0006, conditions(v_sl, v_sg)]))
+    # a spread of fluids and pipes, to reach every branch of the pattern map and both slug forms
+    for _ in range(2500):
+        out.append(("ansari_gradient_random", "ansari_gradient",
+                    [10 ** random.uniform(1.3, 4.0),
+                     random.uniform(1.0, 90.0),
+                     random.uniform(1.0, 7.0),
+                     random.choice([0.0, 0.0006, 0.002, 0.06]),
+                     conditions(10 ** random.uniform(-4, 1.4), 10 ** random.uniform(-4, 2.4),
+                                random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                random.uniform(1.0, 70.0))]))
+    # the pieces on their own, so a disagreement can be placed
+    for v_sl in (0.05, 0.5, 3.0, 20.0):
+        for v_sg in (0.05, 0.5, 5.0, 50.0, 300.0):
+            for d_ft in (0.0829, 0.2034, 0.5):
+                args = [v_sl, v_sg, 52.0, 2.5, 1.2, 0.018, 20.0 * 0.0022046, d_ft, 0.0024,
+                        math.radians(90.0)]
+                out.append(("ans_flow_pattern", "ans_flow_pattern", args))
+                out.append(("ans_annular_film_thickness", "ans_annular_film_thickness", args))
+                out.append(("ans_slug", "_ans_slug", args[:9]))
+    # the film-instability solve and the blend, over their whole range
+    for y_m in (-5.0, 0.0, 1e-3, 0.5, 20.0, 5000.0):
+        for x_m2 in (0.0, 1e-6, 0.01, 1.0, 100.0):
+            out.append(("ans_film_instability", "_ans_film_instability", [y_m, x_m2]))
+    for ratio in (0.5, 1.0, 1.0001, 1.1, 1.25, 1.4999, 1.5, 3.0):
+        out.append(("ans_blend", "_ans_blend", [ratio]))
+
+    # ---- Mukherjee & Brill (1983 / 1985) ------------------------------
+    # every branch of Fig. 16: uphill, horizontal and downhill, including stratified flow
+    for v_sl in (0.0, 1e-9, 0.02, 0.4, 2.0, 10.0, 40.0):
+        for v_sg in (0.0, 1e-9, 0.05, 0.8, 8.0, 80.0, 400.0):
+            if v_sl + v_sg <= 0:
+                continue
+            for angle in (90.0, 45.0, 5.0, 0.0, -5.0, -45.0, -90.0):
+                out.append(("mukherjee_brill_gradient", "mukherjee_brill_gradient",
+                            [1200.0, angle, 2.441, 0.0006, conditions(v_sl, v_sg)]))
+    for _ in range(2500):
+        out.append(("mukherjee_brill_gradient_random", "mukherjee_brill_gradient",
+                    [10 ** random.uniform(1.3, 4.0),
+                     random.uniform(-90.0, 90.0),
+                     random.uniform(1.0, 7.0),
+                     random.choice([0.0, 0.0006, 0.002, 0.06]),
+                     conditions(10 ** random.uniform(-4, 1.4), 10 ** random.uniform(-4, 2.4),
+                                random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                random.uniform(1.0, 70.0))]))
+    # the pieces on their own
+    for v_sl in (0.05, 0.5, 3.0, 20.0):
+        for v_sg in (0.05, 0.5, 5.0, 50.0, 300.0):
+            out.append(("mb_numbers", "mb_numbers", [v_sl, v_sg, 52.0, 20.0, 1.2]))
+    for n_lv in (0.01, 0.5, 5.0, 50.0):
+        for n_gv in (0.01, 0.5, 5.0, 50.0, 500.0):
+            for n_l in (0.002, 0.05, 1.0):
+                for angle in (90.0, 31.0, 30.0, 1.0, 0.0, -1.0, -30.0, -31.0, -90.0):
+                    out.append(("mb_flow_pattern", "mb_flow_pattern", [n_lv, n_gv, n_l, angle]))
+                    for regime in ("slug", "stratified"):
+                        out.append(("mb_holdup", "mb_holdup", [n_lv, n_gv, n_l, angle, regime]))
+    for h_l in (1e-6, 0.01, 0.1, 0.35, 0.5, 0.8, 0.999999):
+        out.append(("mb_stratified_angle", "mb_stratified_angle", [h_l]))
+        for v_sg in (0.5, 5.0, 50.0):
+            out.append(("mb_stratified_friction", "mb_stratified_friction",
+                        [h_l, v_sg, 2.5, 0.018, 0.2034, 0.00025]))
+
+    # ---- Fancher & Brown (1963) ---------------------------------------
+    for glr in (0.0, 100.0, 1499.9, 1500.0, 2000.0, 3000.0, 3000.1, 9000.0):
+        for n_re in (0.5, 3.4, 3.7, 4.7, 5.3, 6.0, 7.0, 15.0, 23.0, 27.0, 35.0, 50.0, 70.0, 500.0):
+            out.append(("fb_friction_factor", "fb_friction_factor", [n_re, glr]))
+        out.append(("fb_glr_band", "fb_glr_band", [glr]))
+    for v_sl in (0.01, 0.3, 2.0, 15.0):
+        for v_sg in (0.0, 0.05, 1.0, 10.0, 100.0):
+            for glr in (200.0, 2000.0, 20000.0):
+                out.append(("fancher_brown_gradient", "fancher_brown_gradient",
+                            [1200.0, 90.0, 2.441, 0.0006, conditions(v_sl, v_sg, glr=glr)]))
+    for _ in range(800):
+        out.append(("fancher_brown_gradient_random", "fancher_brown_gradient",
+                    [10 ** random.uniform(1.3, 4.0),
+                     random.uniform(-90.0, 90.0),
+                     random.uniform(1.0, 7.0),
+                     0.0006,
+                     conditions(10 ** random.uniform(-3, 1.4), 10 ** random.uniform(-3, 2.4),
+                                random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                random.uniform(1.0, 70.0), 0.0,
+                                10 ** random.uniform(1, 4.5))]))
+
     # ---- Gray's two pieces on their own ------------------------------
     for r in (1e-6, 0.001, 0.0069, 0.007, 0.0071, 0.05, 0.5, 5.0, 100.0):
         for n_v in (0.01, 1.0, 100.0, 1e4):

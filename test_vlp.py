@@ -746,7 +746,7 @@ check("CN_L is held flat beyond the end of Fig. 12 (N_L = 0.5)", hb_cn_l(0.9), h
 for b_, psi_paper in [(0.02, 1.105), (0.03, 1.40), (0.04, 1.595), (0.06, 1.75), (0.08, 1.814)]:
     check(f"Fig. 9 secondary correction psi at B = {b_}", hb_psi(b_), psi_paper, tol=0.02)
 # Fig. 13: the published curve fit is a little above the chart in the middle of the range (by up to 0.09 in HL/psi,
-# about 10 %); it is kept because it is closer to PROSPER's own Hagedorn & Brown (see the PROSPER tutorials test).
+# about 10 %); it is kept because it agrees better with the published reference cases (see test_reference_cases.py).
 worst13 = 0.0
 for h_, v_paper in [(1.03e-5, 0.133), (2.8e-5, 0.181), (7.4e-5, 0.264), (1.2e-4, 0.327), (3.2e-4, 0.502), (8.6e-4, 0.721), (2.3e-3, 0.855)]:
     worst13 = max(worst13, abs(hb_holdup_over_psi(h_) - v_paper))
@@ -1588,7 +1588,7 @@ res_f = pressure_traverse(wl, oil, 2000.0, 200.0, "fancher_brown")
 check_true("traverse: Pwf above the wellhead pressure; every step is no-slip", res_f["pwf"] > 200.0 and set(res_f["regime"]) == {"no-slip"})
 check_true("traverse: gravity part is the big one", res_f["dp_hydrostatic"] > res_f["dp_friction"] > 0)
 check("traverse: gravity + friction = the whole pressure drop (no acceleration term)", res_f["dp_hydrostatic"] + res_f["dp_friction"], res_f["pwf"] - 200.0, tol=1e-4)
-# PROSPER calls it the "lowest possible VLP" because it ignores slip.  That is exact for the gravity part (the no-slip density is
+# It is often called the "lowest possible VLP" because it ignores slip.  That is exact for the gravity part (the no-slip density is
 # the lightest mixture): it is below that of every correlation here except Orkiszewski, whose slug-flow liquid distribution term
 # can lower its density under the no-slip one (a known artefact of that method).  The whole pressure also depends on the friction,
 # which each method takes from its own chart, so only the gravity part is held to the ordering.

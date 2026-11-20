@@ -68,7 +68,27 @@ const MAP = {
   dr_slip_region1: vlp.dr_slip_region1, dr_slip_region2: vlp.dr_slip_region2,
   dr_holdup: vlp.dr_holdup, dr_mist_film_roughness: vlp.dr_mist_film_roughness,
   dr_flow_region: vlp.dr_flow_region, duns_ros_gradient: vlp.duns_ros_gradient,
+  // the keys are the PYTHON names, so the private helpers keep their underscore
+  _ans_blend: vlp.ansBlend, _ans_film_instability: vlp.ansFilmInstability,
+  ans_flow_pattern: vlp.ans_flow_pattern,
+  ans_annular_film_thickness: vlp.ans_annular_film_thickness,
+  _ans_slug: vlp.ansSlug, ansari_gradient: vlp.ansari_gradient,
+  mb_numbers: vlp.mb_numbers, mb_flow_pattern: vlp.mb_flow_pattern, mb_holdup: vlp.mb_holdup,
+  mb_stratified_angle: vlp.mb_stratified_angle, mb_stratified_friction: vlp.mb_stratified_friction,
+  mukherjee_brill_gradient: vlp.mukherjee_brill_gradient,
+  fb_glr_band: vlp.fb_glr_band, fb_friction_factor: vlp.fb_friction_factor,
+  fancher_brown_gradient: vlp.fancher_brown_gradient,
 };
+
+/**
+ * Fields whose whole job is to be zero, so a RELATIVE comparison of them is meaningless: they are a
+ * leftover residual of a root-finding solve, not a result.  Python and JavaScript halve the interval
+ * the same number of times but accumulate rounding differently, so their residuals differ in the
+ * last digits of a number that is already around 1e-11.  For these the test is that both are
+ * negligible, which is what the solve promises.
+ */
+const NEAR_ZERO_FIELDS = new Set(["residual_at_root"]);
+const NEAR_ZERO_LIMIT = 1e-6;
 
 /** Relative difference, falling back to the absolute one for numbers near zero. */
 function diff(got, want) {
@@ -89,6 +109,12 @@ function worstDiff(got, want, label, onField) {
     let worst = 0;
     for (const key of Object.keys(want)) worst = Math.max(worst, worstDiff(got[key], want[key], `${label}.${key}`, onField));
     return worst;
+  }
+  const field = label.split(".").pop();
+  if (field !== undefined && NEAR_ZERO_FIELDS.has(field)) {
+    const d0 = Math.abs(got) < NEAR_ZERO_LIMIT && Math.abs(want) < NEAR_ZERO_LIMIT ? 0 : diff(got, want);
+    onField(label, d0, got, want);
+    return d0;
   }
   const d = diff(got, want);
   onField(label, d, got, want);
