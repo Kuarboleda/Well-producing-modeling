@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wellbore schematic</title>
+<!--
+  An interactive cross-section of a flowing well: the Christmas tree, casing, cement, tubing, packer,
+  gas lift valve and perforations, with the produced fluid animated up the tubing and out of the
+  wing valve.
+
+  The numbers in the telemetry box are NOT invented for the animation.  The choke, the gas lift rate
+  and the master valve are fed to the same engine the rest of this app uses - ipr.js, vlp.js, well.js
+  and nodal.js, which are translations of the Python and are held against it by tools/crosscheck.mjs
+  - and the wellhead pressure, bottomhole pressure and flow rate that come back are what drive both
+  the readouts and the speed of the animation.  A nodal solve takes about 90 ms, so a slider can do
+  it as it moves.
+
+  The engine lives in its own files next to this one, so this page is one HTML file with its own CSS
+  and JavaScript but is not standalone: it would be, at the cost of the numbers being made up.
+-->
+<style>
+  :root {
+    --ink: #16202b; --ink-soft: #5a6b7c; --line: #d9e1e8; --panel: #f6f8fa; --bg: #fff;
+    --accent: #1f6feb;
+    --steel: #8b98a5; --steel-dark: #5d6b78; --cement: #c9bda8; --rock: #d8cdb6;
+    --oil: #2f9e44; --gas: #f0a202; --water: #3b82c4; --shut: #d1242f; --open: #1a7f37;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { border-bottom: 1px solid var(--line); padding: 13px 20px; display: flex;
+           flex-wrap: wrap; gap: 12px; align-items: baseline; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  header .sub { color: var(--ink-soft); font-size: 13px; }
+  header .spacer { flex: 1 1 auto; }
+  header a { color: var(--accent); font-size: 13px; text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+
+  .layout { display: flex; flex-wrap: wrap; align-items: stretch; }
+  .side { flex: 0 0 310px; background: var(--panel); border-right: 1px solid var(--line);
+          padding: 16px 18px 24px; }
+  .stage { flex: 1 1 540px; min-width: 0; padding: 10px 16px 24px; }
+
+  h2 { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+       color: var(--ink-soft); margin: 18px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  label { display: block; font-size: 13px; margin-bottom: 12px; }
+  .val { float: right; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+  input[type="range"] { width: 100%; margin: 5px 0 0; accent-color: var(--accent); }
+  input[type="number"], select { width: 100%; padding: 6px 8px; margin-top: 3px; font: inherit;
+    font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .switch { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; font-size: 13px; }
+  .switch input { width: 36px; height: 20px; appearance: none; background: #c3ccd4; border-radius: 10px;
+                  position: relative; cursor: pointer; transition: background 0.15s; flex: 0 0 auto; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                         border-radius: 50%; background: #fff; transition: left 0.15s; }
+  .switch input:checked { background: var(--open); }
+  .switch input:checked::after { left: 18px; }
+  .switch.danger input:checked { background: var(--shut); }
+  .disabled { opacity: 0.45; pointer-events: none; }
+
+  .telemetry { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 12px 14px; }
+  .telemetry dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 7px 10px;
+                  align-items: baseline; }
+  .telemetry dt { font-size: 12px; color: var(--ink-soft); }
+  .telemetry dd { margin: 0; font-size: 19px; font-variant-numeric: tabular-nums; text-align: right; }
+  .telemetry dd small { font-size: 11px; color: var(--ink-soft); font-weight: 400; margin-left: 3px; }
+  .state { margin: 10px 0 0; font-size: 12px; padding: 7px 9px; border-radius: 5px;
+           background: var(--panel); color: var(--ink-soft); }
+  .state.shut { background: #fff1f0; color: #8b1a1f; }
+  .state.lift { background: #fff8e6; color: #7a5600; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-soft);
+            margin: 10px 0 0; }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .note { font-size: 12px; color: var(--ink-soft); margin: 14px 0 0; line-height: 1.5; }
+  svg#well { width: 100%; height: auto; max-height: calc(100vh - 150px); display: block; }
+  svg#well text { font: 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                  fill: var(--ink-soft); }
+  svg#well text.lbl { font-size: 10.5px; fill: var(--ink); }
+  svg#well text.depth { font-size: 9.5px; }
+  @media (max-width: 820px) {
+    .side { flex: 1 1 100%; border-right: none; border-bottom: 1px solid var(--line); }
+    svg#well { max-height: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Wellbore schematic</h1>
+  <span class="sub">a flowing well, drawn and animated from the real calculation</span>
+  <span class="spacer"></span>
+  <span class="sub" id="build">build</span>
+  <a href="index.html">&larr; back to the modelling tool</a>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <h2>Surface control</h2>
+    <label>Choke opening <span class="val" id="v-choke">60 %</span>
+      <input type="range" id="choke" min="0" max="100" step="1" value="60">
+    </label>
+    <div class="switch danger">
+      <input type="checkbox" id="master" checked>
+      <span id="master-label">Master valve open</span>
+    </div>
+
+    <h2>Gas lift</h2>
+    <div class="switch">
+      <input type="checkbox" id="lift">
+      <span id="lift-label">Gas lift off</span>
+    </div>
+    <div id="lift-controls" class="disabled">
+      <label>Injection rate <span class="val" id="v-glr">800 Mscf/d</span>
+        <input type="range" id="glr" min="100" max="4000" step="50" value="800">
+      </label>
+      <label>Valve depth <span class="val" id="v-gld">7,000 ft</span>
+        <input type="range" id="gld" min="1000" max="9500" step="100" value="7000">
+      </label>
+    </div>
+
+    <h2>Live telemetry</h2>
+    <div class="telemetry">
+      <dl>
+        <dt>Wellhead pressure</dt><dd id="t-whp">&ndash;<small>psig</small></dd>
+        <dt>Bottomhole pressure</dt><dd id="t-bhp">&ndash;<small>psig</small></dd>
+        <dt>Liquid rate</dt><dd id="t-q">&ndash;<small>bbl/d</small></dd>
+        <dt>Oil rate</dt><dd id="t-qo">&ndash;<small>bbl/d</small></dd>
+        <dt>Gas rate</dt><dd id="t-qg">&ndash;<small>Mscf/d</small></dd>
+      </dl>
+      <p class="state" id="state">&nbsp;</p>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--oil)"></i>Oil</span>
+      <span><i style="background:var(--gas)"></i>Gas</span>
+      <span><i style="background:var(--water)"></i>Water</span>
+    </div>
+
+    <h2>Well and fluid</h2>
+    <label>Reservoir pressure <span class="val">psig</span>
+      <input type="number" id="p_res" value="4000" step="100" min="500">
+    </label>
+    <label>Productivity index <span class="val">bbl/d/psi</span>
+      <input type="number" id="pi" value="4" step="0.5" min="0.05">
+    </label>
+    <label>Perforation depth <span class="val">ft</span>
+      <input type="number" id="depth" value="10000" step="500" min="2000" max="20000">
+    </label>
+    <label>Tubing inner diameter <span class="val">in</span>
+      <input type="number" id="tubing_id" value="2.992" step="0.1" min="1" max="7">
+    </label>
+    <label>Water cut <span class="val">%</span>
+      <input type="number" id="wc" value="25" step="5" min="0" max="95">
+    </label>
+    <label>Producing GOR <span class="val">scf/bbl</span>
+      <input type="number" id="gor" value="500" step="50" min="0">
+    </label>
+
+    <p class="note" id="engine-note">
+      The readouts come from the same engine as the rest of this app, not from a formula written for
+      the animation: the choke sets the wellhead pressure, the inflow and the tubing are solved for
+      where they balance, and the rate that comes back sets how fast the fluid moves on screen.
+    </p>
+  </aside>
+
+  <main class="stage">
+    <svg id="well" viewBox="0 0 560 780" role="img"
+         aria-label="Cross-section of a flowing oil well from the wellhead to the perforations"></svg>
+  </main>
+</div>
+
+<script type="module">
+import * as pvt from "./pvt.js";
+import * as vlp from "./vlp.js";
+import * as wellmod from "./well.js";
+import * as nodal from "./nodal.js";
+
+const ATM = 14.7;                      // the engine works in absolute pressure, the page in gauge
+const BUILD = "build 20 Nov 2026 16:44 (cf4b8b4)";     // tools/stamp.py writes the date and commit in here
+
+// ---------------------------------------------------------------------
+// The drawing
+// ---------------------------------------------------------------------
+// Everything is laid out from these few numbers, so changing the depth or the tubing size moves the
+// whole picture rather than just a label.
+
+const SVG = { w: 560, h: 780 };
+const GROUND = 150;                    // y of the surface
+const BOTTOM = 726;                    // y of the perforations
+const AXIS = 186;                      // x of the well centre line
+const EARTH = { l: 56, r: 316 };       // the ground block: the labels sit on white beside it
+const LABEL_X = 334;                   // x where the labels start
+
+const el = (id) => document.getElementById(id);
+const svg = el("well");
+const NS = "http://www.w3.org/2000/svg";
+
+/** @param {string} name @param {Record<string, string | number>} attrs */
+function node(name, attrs = {}, text = "") {
+  const n = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+  if (text) n.textContent = text;
+  return n;
+}
+
+const fmt = (v, d = 0) => Number(v).toLocaleString("en-US",
+  { minimumFractionDigits: d, maximumFractionDigits: d });
+
+/** The geometry of the well as drawn, worked out from the inputs. */
+function geometry() {
+  const perf_md = Math.max(Number(el("depth").value) || 10000, 500);
+  const id_in = Math.max(Number(el("tubing_id").value) || 2.992, 1);
+  // the tubing is drawn wider than scale so the fluid inside it can be seen; the casing and the
+  // cement keep their proportions to it
+  const half = 11 + (id_in - 2) * 2.2;
+  const toY = (md) => GROUND + (BOTTOM - GROUND) * Math.min(md / perf_md, 1);
+  return {
+    perf_md, id_in, toY,
+    tubing: { l: AXIS - half, r: AXIS + half },
+    casing: { l: AXIS - half - 30, r: AXIS + half + 30 },
+    cement: { l: AXIS - half - 44, r: AXIS + half + 44 },
+    packer_md: perf_md * 0.955,
+    perf_top: perf_md * 0.962,
+  };
+}
+
+/** Draw everything that does not move. Returns the paths the animation runs along. */
+function drawWell() {
+  const g = geometry();
+  svg.textContent = "";
+
+  const defs = node("defs");
+  // the cement sheath, and the rock around it
+  defs.appendChild((() => {
+    const p = node("pattern", { id: "cem", width: 7, height: 7, patternUnits: "userSpaceOnUse",
+                                patternTransform: "rotate(45)" });
+    p.appendChild(node("rect", { width: 7, height: 7, fill: "var(--cement)" }));
+    p.appendChild(node("line", { x1: 0, y1: 0, x2: 0, y2: 7, stroke: "#ab9e85", "stroke-width": 1.2 }));
+    return p;
+  })());
+  defs.appendChild((() => {
+    const p = node("pattern", { id: "rock", width: 12, height: 12, patternUnits: "userSpaceOnUse" });
+    p.appendChild(node("rect", { width: 12, height: 12, fill: "var(--rock)" }));
+    p.appendChild(node("circle", { cx: 3, cy: 4, r: 1.1, fill: "#bfb399" }));
+    p.appendChild(node("circle", { cx: 9, cy: 9, r: 1.3, fill: "#bfb399" }));
+    return p;
+  })());
+  defs.appendChild((() => {
+    const p = node("pattern", { id: "pay", width: 10, height: 10, patternUnits: "userSpaceOnUse" });
+    p.appendChild(node("rect", { width: 10, height: 10, fill: "#e8dcc0" }));
+    p.appendChild(node("circle", { cx: 2.5, cy: 3, r: 1.5, fill: "#cbb98f" }));
+    p.appendChild(node("circle", { cx: 7.5, cy: 7.5, r: 1.6, fill: "#cbb98f" }));
+    return p;
+  })());
+  svg.appendChild(defs);
+
+  // ---- the formation, the cement and the casing ----
+  const earthW = EARTH.r - EARTH.l;
+  svg.appendChild(node("rect", { x: EARTH.l, y: GROUND, width: earthW, height: SVG.h - GROUND - 18,
+                                 fill: "url(#rock)", opacity: 0.55 }));
+  // the reservoir band
+  const payTop = g.toY(g.perf_top) - 6;
+  svg.appendChild(node("rect", { x: EARTH.l, y: payTop, width: earthW, height: BOTTOM - payTop + 22,
+                                 fill: "url(#pay)" }));
+  svg.appendChild(node("line", { x1: EARTH.l, y1: payTop, x2: EARTH.r, y2: payTop,
+                                 stroke: "#b8a77f", "stroke-width": 1 }));
+  svg.appendChild(node("text", { x: EARTH.r - 6, y: payTop - 6, "text-anchor": "end" }, "reservoir"));
+  // the surface
+  svg.appendChild(node("line", { x1: EARTH.l - 14, y1: GROUND, x2: EARTH.r + 6, y2: GROUND,
+                                 stroke: "#9aa7b2", "stroke-width": 1.5 }));
+
+  for (const side of [-1, 1]) {
+    const cemX = side < 0 ? g.cement.l : g.casing.r;
+    svg.appendChild(node("rect", { x: cemX, y: GROUND, width: g.cement.r - g.casing.r,
+                                   height: BOTTOM + 22 - GROUND, fill: "url(#cem)" }));
+  }
+  // the casing wall
+  for (const x of [g.casing.l, g.casing.r]) {
+    svg.appendChild(node("rect", { x: x - 4, y: GROUND - 4, width: 8, height: BOTTOM + 22 - GROUND + 4,
+                                   fill: "var(--steel)", stroke: "var(--steel-dark)",
+                                   "stroke-width": 0.8 }));
+  }
+  // the annulus, and the tubing wall
+  svg.appendChild(node("rect", { x: g.casing.l + 4, y: GROUND, width: g.casing.r - g.casing.l - 8,
+                                 height: BOTTOM - GROUND, fill: "#eef3f7" }));
+  for (const x of [g.tubing.l, g.tubing.r]) {
+    svg.appendChild(node("rect", { x: x - 3, y: GROUND - 34, width: 6,
+                                   height: g.toY(g.packer_md) - GROUND + 34,
+                                   fill: "var(--steel)", stroke: "var(--steel-dark)",
+                                   "stroke-width": 0.8 }));
+  }
+  // the inside of the tubing, where the fluid is drawn
+  svg.appendChild(node("rect", { id: "bore", x: g.tubing.l + 3, y: GROUND - 34,
+                                 width: g.tubing.r - g.tubing.l - 6,
+                                 height: g.toY(g.packer_md) - GROUND + 34, fill: "#f4fafe" }));
+
+  // ---- the packer ----
+  const packY = g.toY(g.packer_md);
+  for (const side of [-1, 1]) {
+    const x = side < 0 ? g.casing.l + 4 : g.tubing.r + 3;
+    svg.appendChild(node("rect", { x, y: packY, width: (g.casing.r - g.casing.l) / 2 - g.tubing.r + AXIS - 7,
+                                   height: 20, fill: "#3f4b56", rx: 2 }));
+  }
+  svg.appendChild(node("rect", { x: g.tubing.l - 3, y: packY, width: g.tubing.r - g.tubing.l + 6,
+                                 height: 20, fill: "none", stroke: "#3f4b56", "stroke-width": 1 }));
+  // the tubing tail below the packer, open to the perforated interval
+  svg.appendChild(node("rect", { x: g.tubing.l - 3, y: packY + 20, width: 6, height: BOTTOM - packY - 20,
+                                 fill: "var(--steel)" }));
+  svg.appendChild(node("rect", { x: g.tubing.r - 3, y: packY + 20, width: 6, height: BOTTOM - packY - 20,
+                                 fill: "var(--steel)" }));
+  svg.appendChild(node("rect", { x: g.tubing.l + 3, y: packY + 20, width: g.tubing.r - g.tubing.l - 6,
+                                 height: BOTTOM - packY - 20, fill: "#f4fafe" }));
+
+  // ---- the perforations ----
+  const perfs = [];
+  const nPerf = 7;
+  for (let i = 0; i < nPerf; i++) {
+    const y = g.toY(g.perf_top) + (BOTTOM - g.toY(g.perf_top)) * (i + 0.5) / nPerf;
+    for (const side of [-1, 1]) {
+      const x0 = side < 0 ? g.casing.l - 4 : g.casing.r + 4;
+      const x1 = side < 0 ? g.cement.l - 14 : g.cement.r + 14;
+      svg.appendChild(node("path", { d: `M${x0},${y} L${x1},${y}`, stroke: "#8c3b2e",
+                                     "stroke-width": 2.4, "stroke-linecap": "round" }));
+      svg.appendChild(node("path", { d: `M${x0 + side * 5},${y - 4} L${x0},${y} L${x0 + side * 5},${y + 4}`,
+                                     fill: "#8c3b2e" }));
+      perfs.push({ x: x1, y, side });
+    }
+  }
+  svg.appendChild(node("line", { x1: g.tubing.l - 6, y1: BOTTOM, x2: g.tubing.r + 6, y2: BOTTOM,
+                                 stroke: "#3f4b56", "stroke-width": 2 }));
+
+  // ---- the gas lift valve, on the tubing ----
+  const liftOn = el("lift").checked;
+  const gld = Math.min(Number(el("gld").value) || 7000, g.packer_md * 0.98);
+  const glY = g.toY(gld);
+  if (liftOn) {
+    svg.appendChild(node("rect", { x: g.tubing.r - 1, y: glY - 9, width: 15, height: 18, rx: 3,
+                                   fill: "#1d8a7e", stroke: "#136259", "stroke-width": 1 }));
+    svg.appendChild(node("path", { d: `M${g.tubing.r + 12},${glY} L${g.tubing.r + 2},${glY}`,
+                                   stroke: "#fff", "stroke-width": 1.6 }));
+  }
+
+  // ---- the Christmas tree ----
+  const treeTop = 26;
+  const tree = node("g");
+  // the tubing head spool
+  tree.appendChild(node("rect", { x: g.casing.l - 10, y: GROUND - 34, width: g.casing.r - g.casing.l + 20,
+                                  height: 34, fill: "#7d8a96", stroke: "var(--steel-dark)",
+                                  "stroke-width": 1, rx: 2 }));
+  // the vertical bore up to the swab cap
+  tree.appendChild(node("rect", { x: AXIS - 9, y: treeTop, width: 18, height: GROUND - 34 - treeTop,
+                                  fill: "#7d8a96", stroke: "var(--steel-dark)", "stroke-width": 1 }));
+  tree.appendChild(node("rect", { x: AXIS - 15, y: treeTop - 9, width: 30, height: 10, rx: 2,
+                                  fill: "#5d6b78" }));
+  tree.appendChild(node("text", { x: AXIS + 20, y: treeTop - 2, class: "lbl" }, "swab cap"));
+
+  // the wing valve and the flowline out to the right
+  const wingY = 74;
+  tree.appendChild(node("rect", { x: AXIS + 9, y: wingY - 8, width: 86, height: 16, fill: "#7d8a96",
+                                  stroke: "var(--steel-dark)", "stroke-width": 1 }));
+  tree.appendChild(node("rect", { x: AXIS + 95, y: wingY - 11, width: 10, height: 22, rx: 2,
+                                  fill: "#5d6b78" }));
+  svg.appendChild(tree);
+
+  // the two valves, drawn as gate symbols that open and close
+  const masterY = 98;
+  const valve = (x, y, horizontal, id) => {
+    const gg = node("g", { id });
+    const s = 11;
+    const pts = horizontal
+      ? `${x - s},${y - s} ${x - s},${y + s} ${x + s},${y - s} ${x + s},${y + s}`
+      : `${x - s},${y - s} ${x + s},${y - s} ${x - s},${y + s} ${x + s},${y + s}`;
+    gg.appendChild(node("polygon", { points: pts, fill: "#fff", stroke: "var(--steel-dark)",
+                                     "stroke-width": 1.6 }));
+    gg.appendChild(node("circle", { class: "vstate", cx: x, cy: y, r: 4.6, fill: "var(--open)" }));
+    return gg;
+  };
+  svg.appendChild(valve(AXIS, masterY, false, "v-master"));
+  svg.appendChild(valve(AXIS + 58, wingY, true, "v-wing"));
+
+  // ---- depth scale ----
+  const stepFt = g.perf_md > 12000 ? 4000 : g.perf_md > 6000 ? 2000 : 1000;
+  for (let md = 0; md <= g.perf_md + 1; md += stepFt) {
+    const y = g.toY(md);
+    svg.appendChild(node("line", { x1: EARTH.l - 14, y1: y, x2: EARTH.l - 4, y2: y,
+                                   stroke: "#9aa7b2", "stroke-width": 0.9 }));
+    svg.appendChild(node("text", { x: EARTH.l - 17, y: y + 3.2, class: "depth",
+                                   "text-anchor": "end" }, fmt(md)));
+  }
+  svg.appendChild(node("line", { x1: EARTH.l - 4, y1: GROUND, x2: EARTH.l - 4, y2: BOTTOM,
+                                 stroke: "#c3ccd4", "stroke-width": 0.9 }));
+  svg.appendChild(node("text", { x: EARTH.l - 17, y: GROUND - 9, class: "depth",
+                                 "text-anchor": "end" }, "depth, ft"));
+
+  // ---- the labels, with leader lines ----
+  const labels = [
+    [treeTop + 2, "Christmas tree", AXIS + 16],
+    [wingY, "Wing valve and choke", AXIS + 108],
+    [masterY, "Master valve", AXIS + 14],
+    [GROUND - 17, "Tubing head", g.casing.r + 12],
+    [g.toY(g.perf_md * 0.16), "Production casing", g.casing.r + 6],
+    [g.toY(g.perf_md * 0.29), "Cement sheath", g.cement.r + 6],
+    [g.toY(g.perf_md * 0.42), "Production tubing", g.tubing.r + 6],
+    [g.toY(g.perf_md * 0.55), "Casing-tubing annulus", g.casing.r - 10],
+    ...(liftOn ? [[glY, "Gas lift valve", g.tubing.r + 16]] : []),
+    [packY + 10, "Production packer", g.casing.r + 6],
+    [g.toY((g.perf_top + g.perf_md) / 2), "Perforations", g.cement.r + 16],
+  ];
+  let lastY = -99;
+  for (const [y0, text, fromX] of labels) {
+    const y = Math.max(y0, lastY + 15);
+    lastY = y;
+    svg.appendChild(node("path", { d: `M${fromX},${y0} L${LABEL_X - 8},${y}`, stroke: "#b6c0c9",
+                                   "stroke-width": 0.8, fill: "none" }));
+    svg.appendChild(node("circle", { cx: fromX, cy: y0, r: 1.8, fill: "#b6c0c9" }));
+    svg.appendChild(node("text", { x: LABEL_X, y: y + 3.4, class: "lbl" }, text));
+  }
+
+  // ---- the paths the fluid runs along ----
+  // up the tubing from the perforated interval, through the master valve, out of the wing valve
+  const flowPath = `M${AXIS},${BOTTOM - 6} L${AXIS},${wingY} L${AXIS + 120},${wingY}`;
+  const flow = node("path", { id: "flowline", d: flowPath, fill: "none",
+                              stroke: "var(--accent)", "stroke-width": 2,
+                              "stroke-dasharray": "7 9", opacity: 0.35 });
+  svg.appendChild(flow);
+  // down the annulus to the gas lift valve, then in through it
+  const liftPath = `M${g.casing.r - 13},${GROUND - 20} L${g.casing.r - 13},${glY} `
+                 + `L${g.tubing.r + 6},${glY}`;
+  const lift = node("path", { id: "liftline", d: liftPath, fill: "none", stroke: "#1d8a7e",
+                              "stroke-width": 1.8, "stroke-dasharray": "5 7", opacity: liftOn ? 0.45 : 0 });
+  svg.appendChild(lift);
+
+  // the fluid particles live above the lines
+  svg.appendChild(node("g", { id: "fluid" }));
+  svg.appendChild(node("g", { id: "liftfluid" }));
+
+  // what the perforations feed: a few arrows into the bore
+  const inflow = node("g", { id: "inflow" });
+  svg.appendChild(inflow);
+
+  // a shut-in note, shown under a closed master valve
+  const shut = node("g", { id: "shutnote", opacity: 0 });
+  shut.appendChild(node("rect", { x: AXIS + 16, y: masterY + 10, width: 150, height: 30, rx: 4,
+                                  fill: "#fff1f0", stroke: "#f0b3b0" }));
+  shut.appendChild(node("text", { x: AXIS + 24, y: masterY + 24, class: "lbl", fill: "#8b1a1f" },
+                        "closed: pressure building"));
+  shut.appendChild(node("text", { x: AXIS + 24, y: masterY + 35, fill: "#8b1a1f", id: "shutval" }, ""));
+  svg.appendChild(shut);
+
+  return { g, flowEl: flow, liftEl: lift, flowPath, liftPath, perfs, glY, masterY, wingY };
+}
+
+// ---------------------------------------------------------------------
+// The calculation
+// ---------------------------------------------------------------------
+// The choke sets the wellhead pressure: wide open, the well flows against a low flowline pressure;
+// as it closes, the pressure it has to flow against rises towards the shut-in tubing head pressure.
+// That is the honest way round for a nodal model - a choke is a pressure drop, and the engine takes a
+// wellhead pressure - and it is written out here rather than hidden.
+
+const WHP_OPEN = 120.0;                // psig against the flowline with the choke wide open
+
+/** The well and fluid as the engine wants them. */
+function buildCase() {
+  const perf_md = Math.max(Number(el("depth").value) || 10000, 500);
+  const [md, tvd] = wellmod.verticalSurvey(perf_md);
+  const t_res = 90 + 0.013 * perf_md;             // a 1.3 degF per 100 ft gradient from 90 degF
+  const well = wellmod.makeWell({
+    md, tvd, tubing: wellmod.simpleTubing(Number(el("tubing_id").value) || 2.992, perf_md),
+    t_reservoir: t_res, roughness_in: 0.0006,
+    ambient_table: [[0, 80, 5], [perf_md, t_res, 5]],
+  });
+  const p_res = (Number(el("p_res").value) || 4000) + ATM;
+  const wc = Math.min(Math.max((Number(el("wc").value) || 0) / 100, 0), 0.95);
+  const gor = Math.max(Number(el("gor").value) || 0, 1);
+  const liftOn = el("lift").checked;
+  const gl_md = Math.min(Number(el("gld").value) || 7000, perf_md * 0.95);
+  const fluid = new vlp.OilWaterFluid({
+    api: 35, gas_sg: 0.75, rsb: Math.min(gor, 1800), water_cut: wc, gor,
+    salinity: pvt.salinityFromSg(1.02), pvt_method: "glaso", visc_method: "beal",
+    injection_gas_rate: liftOn ? Number(el("glr").value) || 0 : 0,
+    injection_md: liftOn ? gl_md : null, injection_gas_sg: 0.65,
+  });
+  const pb = pvt.oilProperties(p_res, t_res, 35, 0.75, Math.min(gor, 1800), null, "glaso", "beal").pb;
+  return { well, fluid, p_res, pb, perf_md, t_res, wc, gor,
+           J: Math.max(Number(el("pi").value) || 1, 0.01) };
+}
+
+/**
+ * The shut-in tubing head pressure: the reservoir pressure less the weight of the static column.
+ * The traverse needs a flowing rate, so a shut-in well is worked out from the column's own density
+ * at the average of the two pressures rather than by solving a flow it does not have.
+ * @param {any} c
+ */
+function shutInWhp(c) {
+  const p_avg = 0.5 * (c.p_res + ATM + 200);
+  const t_avg = 0.5 * (c.t_res + 90);
+  const o = pvt.oilProperties(p_avg, t_avg, 35, 0.75, Math.min(c.gor, 1800), null, "glaso", "beal");
+  const w = pvt.waterProperties(p_avg, t_avg, pvt.salinityFromSg(1.02));
+  const rho = (1 - c.wc) * o.rho_o + c.wc * w.rho_w;        // lb/ft3
+  return Math.max(c.p_res - rho * c.perf_md / 144.0, ATM);
+}
+
+/** Solve the well for the current settings. */
+function solve() {
+  const c = buildCase();
+  const choke = Number(el("choke").value) / 100;
+  const masterOpen = el("master").checked;
+  const shutInAbs = shutInWhp(c);
+
+  if (!masterOpen || choke <= 0.001) {
+    return { flowing: false, q: 0, qo: 0, qg: 0,
+             whp: shutInAbs - ATM, bhp: c.p_res - ATM,
+             reason: masterOpen ? "Choke shut: the well is closed in at surface."
+                                : "Master valve closed: the well is shut in.", c };
+  }
+
+  // wide open -> WHP_OPEN; nearly shut -> up towards the shut-in pressure
+  const whpAbs = (WHP_OPEN + ATM) + (shutInAbs - WHP_OPEN - ATM) * (1 - choke) ** 2.2;
+  let res;
+  try {
+    res = nodal.solve_well(c.well, c.fluid, "oil_pi", c.p_res, { pb: c.pb, J: c.J },
+                           whpAbs, "hagedorn_brown", 250.0, 14);
+  } catch (error) {
+    return { flowing: false, q: 0, qo: 0, qg: 0, whp: whpAbs - ATM, bhp: c.p_res - ATM,
+             reason: `The well could not be solved: ${error.message}`, c };
+  }
+  if (!res.found) {
+    return { flowing: false, q: 0, qo: 0, qg: 0, whp: whpAbs - ATM, bhp: c.p_res - ATM,
+             reason: "The tubing needs more pressure than the reservoir can give at any rate: the "
+                     + "well will not flow. Open the choke, or turn gas lift on.", c };
+  }
+  const qo = res.q * (1 - c.wc);
+  return { flowing: true, q: res.q, qo, qg: qo * c.gor / 1000,
+           whp: whpAbs - ATM, bhp: res.pwf - ATM, reason: "", c };
+}
+
+// ---------------------------------------------------------------------
+// The animation
+// ---------------------------------------------------------------------
+
+let scene = drawWell();
+let answer = solve();
+let particles = [];
+let liftParticles = [];
+let dash = 0;
+let liftDash = 0;
+
+const PARTICLES = 46;
+const LIFT_PARTICLES = 20;
+
+/** Share of the particles that is oil, gas and water, from the water cut and the GOR. */
+function mix() {
+  const wc = answer.c.wc;
+  // the free gas is a volume at depth, so the GOR is scaled into something that reads as a share
+  const gasShare = Math.min(0.55, answer.c.gor / 3000);
+  return { water: wc * (1 - gasShare), oil: (1 - wc) * (1 - gasShare), gas: gasShare };
+}
+
+function makeParticles() {
+  const m = mix();
+  const flow = scene.flowEl;
+  const len = flow.getTotalLength();
+  particles = [];
+  for (let i = 0; i < PARTICLES; i++) {
+    const r = Math.random();
+    const phase = r < m.gas ? "gas" : r < m.gas + m.oil ? "oil" : "water";
+    particles.push({ s: len * i / PARTICLES, phase,
+                     jitter: (Math.random() - 0.5) * 9,
+                     size: phase === "gas" ? 2.1 + Math.random() * 1.4 : 2.8 + Math.random() * 1.2,
+                     wobble: Math.random() * 6.28 });
+  }
+  const liftLen = scene.liftEl.getTotalLength();
+  liftParticles = [];
+  for (let i = 0; i < LIFT_PARTICLES; i++) {
+    liftParticles.push({ s: liftLen * i / LIFT_PARTICLES, jitter: (Math.random() - 0.5) * 5,
+                         size: 1.8 + Math.random() });
+  }
+  const fluid = el("fluid");
+  const liftFluid = el("liftfluid");
+  fluid.textContent = "";
+  liftFluid.textContent = "";
+  for (const p of particles) {
+    const c = node("circle", { r: p.size, fill: `var(--${p.phase})`,
+                               opacity: p.phase === "gas" ? 0.95 : 0.85 });
+    p.node = c;
+    fluid.appendChild(c);
+  }
+  for (const p of liftParticles) {
+    const c = node("circle", { r: p.size, fill: "#1d8a7e", opacity: 0.9 });
+    p.node = c;
+    liftFluid.appendChild(c);
+  }
+}
+
+/** The inflow arrows at the perforations, drawn only while the well flows. */
+function drawInflow(on) {
+  const g = el("inflow");
+  g.textContent = "";
+  if (!on) return;
+  for (const p of scene.perfs) {
+    g.appendChild(node("path", { d: `M${p.x + p.side * 10},${p.y} L${p.x + p.side * 2},${p.y}`,
+                                 stroke: "var(--oil)", "stroke-width": 1.6, opacity: 0.75,
+                                 "stroke-linecap": "round" }));
+    g.appendChild(node("path", { d: `M${p.x + p.side * 6},${p.y - 3} L${p.x + p.side * 2},${p.y} `
+                                   + `L${p.x + p.side * 6},${p.y + 3}`, fill: "var(--oil)",
+                                 opacity: 0.75 }));
+  }
+}
+
+/** The speed the fluid moves on screen: from the real velocity in the tubing. */
+function screenSpeed() {
+  if (!answer.flowing) return 0;
+  // the mixture velocity at the wellhead, in ft/s, from the rate and the tubing area
+  const id = Number(el("tubing_id").value) || 2.992;
+  const area = Math.PI * (id / 12) ** 2 / 4;
+  const ftPerS = answer.q * 5.615 / 86400 / area;       // liquid only: enough to set a sense of speed
+  return Math.min(Math.max(ftPerS * 26, 8), 240);        // pixels per second, kept inside a readable range
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const speed = screenSpeed();
+  const flow = scene.flowEl;
+  const len = flow.getTotalLength();
+
+  dash = (dash - speed * dt * 0.6) % 16;
+  flow.setAttribute("stroke-dashoffset", String(dash));
+  flow.setAttribute("opacity", answer.flowing ? "0.35" : "0.12");
+
+  for (const p of particles) {
+    p.s = (p.s + speed * dt) % len;
+    const pt = flow.getPointAtLength(p.s);
+    p.wobble += dt * 3;
+    // a gas bubble weaves more than a drop of oil
+    const across = p.jitter + (p.phase === "gas" ? Math.sin(p.wobble) * 2.4 : 0);
+    const inTubing = p.s < len - 130;
+    p.node.setAttribute("cx", String(pt.x + (inTubing ? across : 0)));
+    p.node.setAttribute("cy", String(pt.y + (inTubing ? 0 : across * 0.5)));
+    p.node.setAttribute("opacity", answer.flowing ? (p.phase === "gas" ? "0.95" : "0.85") : "0.12");
+  }
+
+  const liftOn = el("lift").checked && answer.flowing;
+  const liftLen = scene.liftEl.getTotalLength();
+  liftDash = (liftDash - (liftOn ? 70 : 0) * dt) % 12;
+  scene.liftEl.setAttribute("stroke-dashoffset", String(liftDash));
+  scene.liftEl.setAttribute("opacity", liftOn ? "0.45" : "0");
+  for (const p of liftParticles) {
+    if (!liftOn) {
+      p.node.setAttribute("opacity", "0");
+      continue;
+    }
+    const rate = Number(el("glr").value) || 0;
+    p.s = (p.s + (40 + rate / 40) * dt) % liftLen;
+    const pt = scene.liftEl.getPointAtLength(p.s);
+    p.node.setAttribute("cx", String(pt.x + p.jitter * 0.4));
+    p.node.setAttribute("cy", String(pt.y));
+    p.node.setAttribute("opacity", "0.9");
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------------
+// The sidebar
+// ---------------------------------------------------------------------
+
+function showTelemetry() {
+  const a = answer;
+  el("t-whp").innerHTML = `${fmt(a.whp)}<small>psig</small>`;
+  el("t-bhp").innerHTML = `${fmt(a.bhp)}<small>psig</small>`;
+  el("t-q").innerHTML = `${fmt(a.q)}<small>bbl/d</small>`;
+  el("t-qo").innerHTML = `${fmt(a.qo)}<small>bbl/d</small>`;
+  el("t-qg").innerHTML = `${fmt(a.qg)}<small>Mscf/d</small>`;
+  const state = el("state");
+  if (!a.flowing) {
+    state.className = "state shut";
+    state.textContent = a.reason;
+  } else if (el("lift").checked) {
+    state.className = "state lift";
+    state.textContent = `Flowing on gas lift: ${fmt(Number(el("glr").value))} Mscf/d injected at `
+      + `${fmt(Number(el("gld").value))} ft, which lightens the column above the valve.`;
+  } else {
+    state.className = "state";
+    state.textContent = `Flowing naturally. Drawdown ${fmt(a.c.p_res - ATM - a.bhp)} psi.`;
+  }
+  // the valves
+  const masterOpen = el("master").checked;
+  const chokeOpen = Number(el("choke").value) > 0;
+  for (const [id, open] of [["v-master", masterOpen], ["v-wing", chokeOpen]]) {
+    const dot = document.querySelector(`#${id} .vstate`);
+    if (dot) dot.setAttribute("fill", open ? "var(--open)" : "var(--shut)");
+  }
+  el("master-label").textContent = masterOpen ? "Master valve open" : "Master valve closed";
+  const shut = el("shutnote");
+  if (shut) {
+    shut.setAttribute("opacity", a.flowing ? "0" : "1");
+    const v = el("shutval");
+    if (v) v.textContent = `below the valve: ${fmt(a.bhp)} psig at the perforations`;
+  }
+  drawInflow(a.flowing);
+}
+
+function readouts() {
+  el("v-choke").textContent = `${el("choke").value} %`;
+  el("v-glr").textContent = `${fmt(Number(el("glr").value))} Mscf/d`;
+  el("v-gld").textContent = `${fmt(Number(el("gld").value))} ft`;
+  el("lift-label").textContent = el("lift").checked ? "Gas lift on" : "Gas lift off";
+  el("lift-controls").classList.toggle("disabled", !el("lift").checked);
+}
+
+/** Recalculate, and redraw the picture when the geometry itself has changed. */
+let pending = 0;
+function update(redraw = false) {
+  readouts();
+  clearTimeout(pending);
+  pending = window.setTimeout(() => {
+    if (redraw) {
+      scene = drawWell();
+      makeParticles();
+    }
+    answer = solve();
+    showTelemetry();
+  }, 60);
+}
+
+for (const id of ["choke", "glr"]) el(id).addEventListener("input", () => update(false));
+for (const id of ["gld", "lift"]) el(id).addEventListener("input", () => update(true));
+el("master").addEventListener("input", () => update(false));
+for (const id of ["p_res", "pi", "wc", "gor"]) el(id).addEventListener("input", () => update(false));
+for (const id of ["depth", "tubing_id"]) el(id).addEventListener("input", () => update(true));
+
+// the build marker, as on the main page, so a cached copy can be spotted
+el("build").textContent = BUILD;
+makeParticles();
+showTelemetry();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

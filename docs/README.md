@@ -60,6 +60,25 @@ measurable rather than a matter of taste, so it was measured:
   refresh does not throw it away. **Reset** puts the starting values back. A first-time visitor sees
   the starting well, not someone else's.
 
+## The wellbore schematic
+
+`schematic.html` is a cross-section of a flowing well - Christmas tree, master and wing valves,
+production casing, cement sheath, tubing, packer, gas lift valve and perforations - with the
+produced fluid animated from the perforations, up the tubing and out of the wing valve as oil, gas
+and water particles in the proportions the water cut and GOR give. A choke slider, a master valve
+switch and a gas lift toggle with its own rate and depth drive it.
+
+**The telemetry is not invented for the animation.** The choke sets the wellhead pressure the well
+has to flow against - wide open, a flowline pressure; closing, up towards the shut-in tubing head
+pressure - and the same engine as the rest of this app solves the inflow and the tubing for where
+they balance. The wellhead pressure, bottomhole pressure and rates shown are what comes back, and
+the rate also sets how fast the fluid moves on screen. A solve takes about 90 ms, so a slider can do
+it as it moves. Close the master valve and the rate goes to zero, the bottomhole pressure builds back
+to the reservoir pressure, and the drawing says so.
+
+It is one HTML file with its own CSS and JavaScript, but it is not standalone: it imports the engine
+from the files beside it. It could be made standalone, at the cost of the numbers being made up.
+
 ## Choosing the correlation
 
 The correlation box starts on the one the app suggests for the well that has been entered - the
@@ -77,6 +96,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | File | What it is |
 |---|---|
 | `index.html` | the page: the input panel on the left, three tabs on the right |
+| `schematic.html` | a separate page: an interactive cross-section of a flowing well, animated, with its own choke, master valve and gas lift controls |
 | `app.js` | wiring only - reads the boxes, calls the engine, draws the charts. No engineering in it |
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
@@ -90,6 +110,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
 | `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
+| `tools/test_schematic.mjs` | drives the wellbore schematic: every part drawn, the fluid moving, and the telemetry answering the choke, the master valve and gas lift the way the physics says it must (47 checks) |
 | `tools/test_ui.mjs` | drives the real page and checks the interface: the Calculate bar, the two well drawings, the flow patterns of every correlation, the out-of-date marker, Enter, the remembered well, the three-column layout, the phone layout (71 checks) |
 | `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 

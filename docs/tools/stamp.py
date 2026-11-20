@@ -17,7 +17,9 @@ import re
 import subprocess
 import sys
 
-PAGE = pathlib.Path(__file__).resolve().parent.parent / "index.html"
+DOCS = pathlib.Path(__file__).resolve().parent.parent
+PAGE = DOCS / "index.html"
+SCHEMATIC = DOCS / "schematic.html"
 
 
 def short_sha():
@@ -44,6 +46,15 @@ def main():
         return 1
     PAGE.write_text(new)
     print(f"index.html stamped: {marker}")
+
+    # the schematic page carries the same marker, in its own constant
+    if SCHEMATIC.exists():
+        text2 = SCHEMATIC.read_text()
+        new2 = re.sub(r'(const BUILD = ")[^"]*(";)',
+                      lambda m: m.group(1) + marker + m.group(2), text2, count=1)
+        if new2 != text2:
+            SCHEMATIC.write_text(new2)
+            print(f"schematic.html stamped: {marker}")
     return 0
 
 

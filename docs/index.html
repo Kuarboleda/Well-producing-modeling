@@ -43,6 +43,8 @@
   header .spacer { flex: 1 1 auto; }
   header button { font-size: 13px; }
   header .build { font-variant-numeric: tabular-nums; opacity: 0.75; }
+  header .toplink { font-size: 13px; color: var(--accent); text-decoration: none; }
+  header .toplink:hover { text-decoration: underline; }
   header .units { font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; margin: 0; }
   header .units select { width: auto; margin: 0; padding: 5px 8px; font-size: 13px; color: var(--ink); }
 
@@ -234,7 +236,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 20 Nov 2026 16:29 (2b0de9d)</span>
+  <span class="sub build" id="build">build 20 Nov 2026 16:44 (cf4b8b4)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -242,6 +244,7 @@
       <option value="metric">Metric</option>
     </select>
   </label>
+  <a class="toplink" href="schematic.html">Wellbore schematic</a>
   <button id="btn-save">Save case</button>
   <button id="btn-open">Open case</button>
   <input type="file" id="file-open" accept=".json" class="hidden">
@@ -648,6 +651,10 @@
           comes, then matches the one you keep. No correlation is right until it is checked against
           something measured.</li>
       </ol>
+      <p>The <b>Wellbore schematic</b> link at the top opens a separate page: a cross-section of a
+        flowing well with the fluid animated up the tubing, a choke, a master valve and a gas lift
+        valve you can work, and the pressures and rates calculated by this same engine as you move
+        them. It is a demonstration of how a well responds, not a second copy of this tool.</p>
       <p><b>Save case</b> writes the well to a small file on your computer, and <b>Open case</b>
         reads one back. The well you are working on is also remembered in this browser, so a refresh
         does not lose it; <b>Reset</b> puts everything back to the starting values.</p>
@@ -846,6 +853,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=2b0de9d"></script>
+<script type="module" src="app.js?v=cf4b8b4"></script>
 </body>
 </html>
