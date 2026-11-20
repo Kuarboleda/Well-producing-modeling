@@ -86,6 +86,61 @@ def cases():
         for v_sg in (0.5, 50.0, 300.0):
             out.append(("beggs_brill_gradient_ek", "beggs_brill_gradient",
                         [p, 90.0, 2.441, 0.0006, conditions(0.5, v_sg)]))
+
+    # ---- Hagedorn and Brown: the three chart fits on their own -------
+    for n_l in (0.0, 1e-4, 0.002, 0.05, 0.2, 0.5, 0.8, 5.0):
+        out.append(("hb_cn_l", "hb_cn_l", [n_l]))
+    # H spans the power-law piece below 1e-5, the join, and the fit above it
+    for h in (0.0, 1e-9, 1e-7, 9.9e-6, 1e-5, 1.1e-5, 1e-4, 0.002, 0.05, 0.5, 5.0, 100.0):
+        out.append(("hb_holdup_over_psi", "hb_holdup_over_psi", [h]))
+    # B spans all three pieces and both joins
+    for b in (0.0, 0.005, 0.0249, 0.025, 0.0251, 0.04, 0.0549, 0.055, 0.0551, 0.1, 0.5, 3.0):
+        out.append(("hb_psi", "hb_psi", [b]))
+    for v_m in (0.1, 1.0, 5.0, 40.0):
+        for v_sg in (0.0, 0.05, 0.5, 2.0):
+            if v_sg <= v_m:
+                out.append(("griffith_bubble_holdup", "griffith_bubble_holdup", [v_m, v_sg]))
+    for p in (50.0, 1500.0, 9000.0):
+        for d_ft in (0.1, 0.2493, 0.5):
+            for v_sl, v_sg in ((0.5, 2.0), (0.01, 40.0), (5.0, 0.2)):
+                out.append(("hb_numbers", "hb_numbers", [p, d_ft, conditions(v_sl, v_sg)]))
+
+    # ---- Hagedorn and Brown and Gray: the whole gradient -------------
+    # The velocities walk from bubble flow (little gas) through to mist (almost all gas),
+    # so both the Griffith branch and the chart branch are exercised.
+    for name, func in (("hagedorn_brown_gradient", "hagedorn_brown_gradient"),
+                       ("gray_gradient", "gray_gradient")):
+        for v_sl in (0.0, 1e-9, 0.001, 0.05, 0.5, 3.0, 20.0):
+            for v_sg in (0.0, 1e-9, 0.02, 0.4, 4.0, 40.0, 200.0):
+                if v_sl + v_sg <= 0:
+                    continue
+                for angle in (90.0, 60.0, 15.0, 0.0, -45.0):
+                    out.append((name, func, [1200.0, angle, 2.441, 0.0006, conditions(v_sl, v_sg)]))
+        for d_in in (1.995, 2.992, 5.0):
+            for rho_l, mu_l, sigma in ((45.0, 0.4, 8.0), (62.4, 0.6, 60.0), (55.0, 40.0, 25.0)):
+                for rho_g, mu_g in ((0.5, 0.011), (6.0, 0.022)):
+                    for p in (80.0, 2500.0, 9000.0):
+                        out.append((name, func, [p, 90.0, d_in, 0.0006,
+                                                 conditions(0.3, 6.0, rho_l, rho_g, mu_l, mu_g, sigma)]))
+        for _ in range(1500):
+            out.append((name + "_random", func,
+                        [10 ** random.uniform(1.3, 4.0),
+                         random.uniform(-90.0, 90.0),
+                         random.uniform(1.0, 7.0),
+                         random.choice([0.0, 0.0006, 0.002]),
+                         conditions(10 ** random.uniform(-4, 1.4), 10 ** random.uniform(-4, 2.3),
+                                    random.uniform(40.0, 70.0), random.uniform(0.2, 20.0),
+                                    10 ** random.uniform(-1, 2), random.uniform(0.01, 0.04),
+                                    random.uniform(1.0, 70.0))]))
+
+    # ---- Gray's two pieces on their own ------------------------------
+    for r in (1e-6, 0.001, 0.0069, 0.007, 0.0071, 0.05, 0.5, 5.0, 100.0):
+        for n_v in (0.01, 1.0, 100.0, 1e4):
+            for n_d in (1.0, 50.0, 500.0, 1e4):
+                out.append(("gray_holdup", "gray_holdup", [r, n_v, n_d]))
+        for rho_ns, v_m in ((1.0, 5.0), (30.0, 40.0), (0.3, 1.0)):
+            out.append(("gray_effective_roughness", "gray_effective_roughness",
+                        [r, 0.0006 / 12.0, 20.0 * 0.0022046, rho_ns, v_m]))
     return out
 
 

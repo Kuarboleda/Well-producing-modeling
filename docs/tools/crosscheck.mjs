@@ -57,6 +57,11 @@ const MAP = {
   friction_factor: vlp.friction_factor,
   sigma_oil_gas: vlp.sigma_oil_gas, sigma_water_gas: vlp.sigma_water_gas,
   beggs_brill_gradient: vlp.beggs_brill_gradient,
+  hb_cn_l: vlp.hb_cn_l, hb_holdup_over_psi: vlp.hb_holdup_over_psi, hb_psi: vlp.hb_psi,
+  hb_numbers: vlp.hb_numbers, griffith_bubble_holdup: vlp.griffith_bubble_holdup,
+  hagedorn_brown_gradient: vlp.hagedorn_brown_gradient,
+  gray_holdup: vlp.gray_holdup, gray_effective_roughness: vlp.gray_effective_roughness,
+  gray_gradient: vlp.gray_gradient,
 };
 
 /** Relative difference, falling back to the absolute one for numbers near zero. */

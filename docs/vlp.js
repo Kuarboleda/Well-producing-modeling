@@ -3,9 +3,10 @@
  * vlp.js - Vertical Lift Performance: the tubing side, translated from vlp.py.
  *
  * Being written in stages, each one cross-checked against the Python before the next begins.
- * Done so far: the friction factor, surface tension, and Beggs and Brill (1973).
- * Still to come: Hagedorn and Brown, Gray, Orkiszewski, Ansari, Duns and Ros,
- * Mukherjee and Brill, Fancher and Brown, the fluids and the pressure traverse.
+ * Done so far: the friction factor, surface tension, Beggs and Brill (1973),
+ * Hagedorn and Brown (1965) and Gray (1974).
+ * Still to come: Orkiszewski, Ansari, Duns and Ros, Mukherjee and Brill,
+ * Fancher and Brown, the fluids and the pressure traverse.
  *
  * Every function keeps the same name and the same argument order as the Python, so
  * tools/crosscheck.mjs can call both with one list of numbers.
@@ -273,4 +274,261 @@ export function beggs_brill_gradient(p, angle_deg, d_in, roughness_in, c) {
   const e_k = Math.min(rho_s * v_m * v_sg / (GC * p * 144.0), 0.95);
   const dpdl = (hydrostatic + friction) / (1.0 - e_k);
   return { dpdl, hl, regime, hydrostatic, friction, f_tp, re: re_ns, e_k };
+}
+
+
+// =====================================================================
+// Hagedorn and Brown (1965) with the Griffith bubble-flow correction
+// =====================================================================
+// Hagedorn and Brown measured pressures in a 1500 ft vertical well and found the liquid holdup
+// (fraction of the pipe filled with liquid) from three CHARTS built from four dimensionless numbers
+// (the Duns and Ros numbers).  Reading charts by eye does not work in a program, so the three charts
+// are replaced here by published curve fits (the same ones used in Brill and Mukherjee's book):
+//     chart 1:  N_L   -> CN_L      (viscosity coefficient)
+//     chart 2:  H     -> HL/psi    (holdup before correction)
+//     chart 3:  B     -> psi       (correction factor)
+//     holdup  = (HL/psi) * psi
+// It is a VERTICAL-flow correlation: the angle is only used for the hydrostatic term (sin of the
+// angle), so use it with care in strongly deviated or horizontal sections.  Two well-known
+// modifications are included:
+//   * Griffith bubble flow: when there is very little gas (gas fraction below LB) the holdup comes
+//     from Griffith's slip equation (slip velocity 0.8 ft/s).
+//   * The holdup is never allowed below the no-slip liquid fraction (liquid cannot travel slower
+//     than the gas) and never above 1.
+
+export const HB_SLIP_VELOCITY = 0.8;      // Griffith bubble-flow slip velocity, ft/s
+export const HB_PATM = 14.7;              // psia, used in the pressure ratio of the holdup group
+export const HB_LOW_H = 1.0e-5;           // below this the paper's chart is used instead of the fit
+
+/**
+ * Chart 1 (Fig. 12 of the paper): viscosity coefficient CN_L from the liquid viscosity number N_L.
+ * The paper's Fig. 12 ends at N_L = 0.5 (CN_L about 0.011) and is flat there; the cubic fit would
+ * keep rising beyond it (0.021 at N_L = 1), so N_L is held at 0.5 for very viscous liquids.
+ * @param {number} n_l
+ */
+export function hb_cn_l(n_l) {
+  n_l = Math.min(Math.max(n_l, 0.0), 0.5);
+  return 0.061 * n_l ** 3 - 0.0929 * n_l ** 2 + 0.0505 * n_l + 0.0019;
+}
+
+/** The published curve fit behind chart 2. @param {number} h */
+function hbFit(h) {
+  const top = 0.0047 + 1123.32 * h + 729489.64 * h ** 2;
+  const bottom = 1.0 + 1097.1566 * h + 722153.97 * h ** 2;
+  return Math.sqrt(top / bottom);
+}
+
+/**
+ * Chart 2: HL/psi from the group H.  Goes from 0 (H = 0) up to 1 (H large).
+ * The published curve fit (Brill and Mukherjee) is good for H above 1e-5 but flattens to 0.07 as
+ * H -> 0, while the chart in the paper keeps falling (0.01 at H = 1e-7).  That floor would put 7 %
+ * liquid in a wet-gas well that carries almost none, so below H = 1e-5 the curve follows the
+ * chart's slope (about H^0.55) instead.
+ * @param {number} h
+ */
+export function hb_holdup_over_psi(h) {
+  h = Math.max(h, 0.0);
+  if (h < HB_LOW_H) return hbFit(HB_LOW_H) * (h / HB_LOW_H) ** 0.55;
+  return hbFit(h);
+}
+
+/**
+ * Chart 3: secondary correction factor psi from the group B.  Starts at 1 and grows to about 1.8
+ * as the gas velocity number grows (three straight/curved pieces).
+ * @param {number} b
+ */
+export function hb_psi(b) {
+  b = Math.max(b, 0.0);
+  if (b <= 0.025) return 27170.0 * b ** 3 - 317.52 * b ** 2 + 0.5472 * b + 0.9999;
+  if (b <= 0.055) return -533.33 * b ** 2 + 58.524 * b + 0.1171;
+  return 2.5714 * b + 1.5962;
+}
+
+/**
+ * The four dimensionless numbers and the two chart groups H and B.
+ * @param {number} p @param {number} d_ft @param {FlowConditions} c
+ * @returns {{n_lv: number, n_gv: number, n_d: number, n_l: number, cn_l: number, h: number, b: number}}
+ */
+export function hb_numbers(p, d_ft, c) {
+  const root4 = (c.rho_l / c.sigma) ** 0.25;
+  const n_lv = 1.938 * c.v_sl * root4;                             // liquid velocity number
+  const n_gv = 1.938 * c.v_sg * root4;                             // gas velocity number
+  const n_d = 120.872 * d_ft * (c.rho_l / c.sigma) ** 0.5;         // pipe diameter number
+  const n_l = 0.15726 * c.mu_l * (1.0 / (c.rho_l * c.sigma ** 3)) ** 0.25;   // liquid viscosity number
+  const cn_l = hb_cn_l(n_l);
+  const h = n_lv / n_gv ** 0.575 * (p / HB_PATM) ** 0.1 * cn_l / n_d;
+  const b = n_gv * n_lv ** 0.38 / n_d ** 2.14;
+  return { n_lv, n_gv, n_d, n_l, cn_l, h, b };
+}
+
+/**
+ * Griffith bubble-flow liquid holdup:
+ *   HL = 1 - 0.5 * (1 + vm/vs - sqrt((1 + vm/vs)^2 - 4 vsg/vs))
+ * @param {number} v_m @param {number} v_sg
+ */
+export function griffith_bubble_holdup(v_m, v_sg) {
+  const x = 1.0 + v_m / HB_SLIP_VELOCITY;
+  return 1.0 - 0.5 * (x - Math.sqrt(Math.max(x * x - 4.0 * v_sg / HB_SLIP_VELOCITY, 0.0)));
+}
+
+/**
+ * Hagedorn and Brown pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient (see there for the meaning of the inputs).
+ * 'regime' is 'hagedorn', 'bubble', 'liquid' or 'gas'.
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ * @returns {{dpdl: number, hl: number, regime: string, hydrostatic: number, friction: number,
+ *            f_tp: number, re: number, e_k: number}}
+ */
+export function hagedorn_brown_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl, v_sg = c.v_sg;
+  const v_m = v_sl + v_sg;                            // mixture velocity
+  check(v_m > 0, "No flow: mixture velocity is zero.");
+  let lam = v_sl / v_m;                               // no-slip liquid fraction
+  const theta = radians(angle_deg);
+  const rho_l = c.rho_l, rho_g = c.rho_g, mu_l = c.mu_l, mu_g = c.mu_g;
+
+  // ---- liquid holdup ------------------------------------------------
+  let regime, hl;
+  if (lam < 1e-8) {                                   // gas only
+    regime = "gas"; hl = 0.0; lam = 0.0;
+  } else if (lam > 1.0 - 1e-8) {                      // liquid only
+    regime = "liquid"; hl = 1.0; lam = 1.0;
+  } else {
+    const lb = Math.max(1.071 - 0.2218 * v_m ** 2 / d_ft, 0.13);   // Griffith bubble-flow limit
+    if (v_sg / v_m < lb) {
+      regime = "bubble";
+      hl = griffith_bubble_holdup(v_m, v_sg);
+    } else {
+      regime = "hagedorn";
+      const num = hb_numbers(p, d_ft, c);
+      hl = hb_holdup_over_psi(num.h) * hb_psi(num.b);
+    }
+    hl = Math.min(Math.max(hl, lam), 1.0);            // never below no-slip, never above 1
+  }
+
+  // ---- densities ----------------------------------------------------
+  const rho_ns = rho_l * lam + rho_g * (1.0 - lam);   // no-slip mixture density
+  const rho_s = rho_l * hl + rho_g * (1.0 - hl);      // in-situ (slip) density
+
+  // ---- friction -----------------------------------------------------
+  let re, f, friction;
+  if (regime === "bubble") {
+    // Bubble flow: the liquid fills the pipe, so friction is that of the liquid moving at its
+    // true (in-situ) velocity.
+    const v_l = v_sl / hl;
+    re = RE_CONST * rho_l * v_l * d_ft / mu_l;
+    f = friction_factor(re, roughness_in / d_in);
+    friction = f * rho_l * v_l ** 2 / (2.0 * GC * d_ft) / 144.0;
+  } else {
+    // Original Hagedorn and Brown: viscosity weighted by the holdup, and the friction term uses
+    // rho_ns^2 / rho_s.
+    const mu_s = mu_l ** hl * mu_g ** (1.0 - hl);
+    re = RE_CONST * rho_ns * v_m * d_ft / mu_s;
+    f = friction_factor(re, roughness_in / d_in);
+    friction = f * rho_ns ** 2 * v_m ** 2 / (2.0 * GC * d_ft * rho_s) / 144.0;
+  }
+
+  const hydrostatic = rho_s * Math.sin(theta) / 144.0;   // psi/ft
+
+  // ---- acceleration term and total (same form as in Beggs and Brill) ----
+  const e_k = Math.min(rho_s * v_m * v_sg / (GC * p * 144.0), 0.95);
+  const dpdl = (hydrostatic + friction) / (1.0 - e_k);
+  return { dpdl, hl, regime, hydrostatic, friction, f_tp: f, re, e_k };
+}
+
+// =====================================================================
+// Gray (1974, API 14B) - vertical GAS wells that also make a little liquid
+// =====================================================================
+// Made for lean gas-condensate and wet-gas wells, where the liquid travels as a mist or a thin
+// film.  Two ideas:
+//   * the liquid holdup comes from one equation in a velocity number (N_v) and a diameter
+//     number (N_D);
+//   * a liquid film roughens the pipe wall, so the friction uses an "effective" roughness that
+//     moves from the pipe's own roughness (almost no liquid) to a value set by surface tension
+//     (R = liquid/gas velocity ratio of 0.007 or more).
+// Gravity uses the slip density, friction uses the no-slip mixture.
+// Meant for: gas velocity up to about 50 ft/s... and beyond, tubing up to 3 in, condensate below
+// 50 STB/MMscf, water below 5 STB/MMscf.  Not for oil wells.
+
+export const GRAY_SIGMA_UNIT = 0.0022046;     // 1 dyne/cm expressed in lbm/s2 (the unit N_v and N_D need)
+export const GRAY_MIN_ROUGHNESS = 2.77e-5;    // ft, smallest effective roughness allowed
+
+/**
+ * Gray liquid holdup (fraction of the pipe filled with liquid).
+ * r = v_sl / v_sg.  Same equation as in the API 14B manual.
+ * @param {number} r @param {number} n_v @param {number} n_d
+ */
+export function gray_holdup(r, n_v, n_d) {
+  const b = 0.0814 * (1.0 - 0.0554 * Math.log(1.0 + 730.0 * r / (r + 1.0)));
+  const f1 = -2.314 * (n_v * (1.0 + 205.0 / n_d)) ** b;
+  return 1.0 - (1.0 - Math.exp(f1)) / (r + 1.0);
+}
+
+/**
+ * Effective wall roughness (ft) seen by the gas when a liquid film is present.
+ * @param {number} r @param {number} k_ft @param {number} sigma_lbm @param {number} rho_ns @param {number} v_m
+ */
+export function gray_effective_roughness(r, k_ft, sigma_lbm, rho_ns, v_m) {
+  const k0 = 28.5 * sigma_lbm / (rho_ns * v_m ** 2);           // roughness set by the liquid film
+  let k_e;
+  if (r >= 0.007) k_e = k0;
+  else k_e = k_ft + r * (k0 - k_ft) / 0.007;                   // blend from the pipe's own roughness
+  return Math.max(k_e, GRAY_MIN_ROUGHNESS);
+}
+
+/**
+ * Gray pressure gradient (psi per ft of pipe), same inputs and same kind of result as
+ * beggs_brill_gradient (see there for the meaning of the inputs).
+ * 'regime' is 'gray', 'liquid' or 'gas'; 'k_eff' is the effective roughness in ft.
+ * The acceleration term is kept (Gray's original leaves it out); for gas wells it is a few
+ * percent near the wellhead.
+ * @param {number} p @param {number} angle_deg @param {number} d_in @param {number} roughness_in
+ * @param {FlowConditions} c
+ * @returns {{dpdl: number, hl: number, regime: string, hydrostatic: number, friction: number,
+ *            f_tp: number, re: number, e_k: number, k_eff: number}}
+ */
+export function gray_gradient(p, angle_deg, d_in, roughness_in, c) {
+  check(p > 0 && d_in > 0, "Pressure and diameter must be > 0.");
+  const d_ft = d_in / 12.0;
+  const v_sl = c.v_sl, v_sg = c.v_sg;
+  const v_m = v_sl + v_sg;
+  check(v_m > 0, "No flow: mixture velocity is zero.");
+  let lam = v_sl / v_m;                               // no-slip liquid fraction
+  const theta = radians(angle_deg);
+  const rho_l = c.rho_l, rho_g = c.rho_g, mu_l = c.mu_l, mu_g = c.mu_g;
+  const k_ft = roughness_in / 12.0;
+
+  let regime, hl = 0.0;
+  if (lam < 1e-8) {                                   // gas only
+    regime = "gas"; hl = 0.0; lam = 0.0;
+  } else if (lam > 1.0 - 1e-8) {                      // liquid only
+    regime = "liquid"; hl = 1.0; lam = 1.0;
+  } else {
+    regime = "gray";
+  }
+  const rho_ns = rho_l * lam + rho_g * (1.0 - lam);   // no-slip mixture density
+  const mu_ns = mu_l * lam + mu_g * (1.0 - lam);      // no-slip mixture viscosity
+  let k_eff = k_ft;
+
+  if (regime === "gray") {
+    const sigma = c.sigma * GRAY_SIGMA_UNIT;          // lbm/s2
+    const r = v_sl / v_sg;
+    const d_rho = Math.max(rho_l - rho_g, 1.0);
+    const n_v = rho_ns ** 2 * v_m ** 4 / (GC * sigma * d_rho);
+    const n_d = GC * d_rho * d_ft ** 2 / sigma;
+    hl = Math.min(Math.max(gray_holdup(r, n_v, n_d), lam), 1.0);   // never below no-slip, never above 1
+    k_eff = gray_effective_roughness(r, k_ft, sigma, rho_ns, v_m);
+  }
+
+  const rho_s = rho_l * hl + rho_g * (1.0 - hl);      // in-situ (slip) density
+  const re = RE_CONST * rho_ns * v_m * d_ft / mu_ns;
+  const f = friction_factor(re, Math.min(k_eff / d_ft, 0.05));     // relative roughness is capped at 0.05
+  const hydrostatic = rho_s * Math.sin(theta) / 144.0;
+  const friction = f * rho_ns * v_m ** 2 / (2.0 * GC * d_ft) / 144.0;
+  const e_k = Math.min(rho_s * v_m * v_sg / (GC * p * 144.0), 0.95);
+  const dpdl = (hydrostatic + friction) / (1.0 - e_k);
+  return { dpdl, hl, regime, hydrostatic, friction, f_tp: f, re, e_k, k_eff };
 }
