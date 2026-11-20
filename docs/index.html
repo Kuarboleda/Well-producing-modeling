@@ -6,10 +6,10 @@
 <title>Integrated Well Modelling Tool</title>
 <!--
   The whole app is files: no server, nothing to wake up.  Every calculation below runs inside the
-  browser, in pvt.js and ipr.js, which are line-for-line translations of the Python engine and are
-  held against it by tools/crosscheck.mjs.
+  browser, in pvt.js, ipr.js, vlp.js, well.js and nodal.js, which are line-for-line translations of
+  the Python engine and are held against it by tools/crosscheck.mjs.
 
-  Plotly draws the chart.  It is the only outside library, pinned to an exact version.
+  Plotly draws the charts.  It is the only outside library, pinned to an exact version.
 -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <style>
@@ -20,7 +20,6 @@
     --panel: #f6f8fa;
     --bg: #ffffff;
     --accent: #1f6feb;
-    --ipr: #1f77b4;
     --warn-bg: #fff6e0;
     --warn-line: #e3b341;
   }
@@ -48,54 +47,92 @@
 
   .layout { display: flex; flex-wrap: wrap; align-items: flex-start; }
   .panel {
-    flex: 0 0 340px;
+    flex: 0 0 350px;
     border-right: 1px solid var(--line);
     background: var(--panel);
-    padding: 16px 18px 28px;
+    padding: 14px 18px 28px;
     min-height: calc(100vh - 120px);
   }
-  .main { flex: 1 1 520px; padding: 16px 20px 32px; min-width: 0; }
+  .main { flex: 1 1 560px; padding: 14px 20px 32px; min-width: 0; }
 
-  fieldset { border: none; margin: 0 0 18px; padding: 0; }
+  fieldset { border: none; margin: 0 0 14px; padding: 0; }
   legend {
     font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--ink-soft); padding: 0 0 8px;
   }
   label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--ink); }
   label .u { color: var(--ink-soft); font-weight: 400; }
-  input[type="number"], select, button {
+  label.check { display: flex; align-items: center; gap: 8px; }
+  label.check input { width: auto; margin: 0; }
+  input[type="number"], input[type="text"], select, textarea, button {
     width: 100%; padding: 7px 9px; margin-top: 3px;
     border: 1px solid var(--line); border-radius: 6px;
     font: inherit; font-size: 14px; color: var(--ink); background: #fff;
   }
-  input[type="number"]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button { cursor: pointer; background: #fff; width: auto; padding: 7px 13px; }
   button:hover { border-color: var(--ink-soft); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: #1a5fd0; }
+  button[disabled] { opacity: 0.55; cursor: progress; }
   .row { display: flex; gap: 10px; }
   .row > label { flex: 1 1 0; min-width: 0; }
   .hidden { display: none !important; }
+
+  /* the sidebar sections, which open and close like the Streamlit expanders */
+  .panel details.group { margin: 0 0 10px; font-size: inherit; color: inherit; }
+  .panel details.group > summary {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft); padding: 7px 0; border-bottom: 1px solid var(--line);
+    list-style: none; display: flex; align-items: center; gap: 7px;
+  }
+  .panel details.group > summary::-webkit-details-marker { display: none; }
+  .panel details.group > summary::before { content: "\25B8"; font-size: 10px; }
+  .panel details.group[open] > summary::before { content: "\25BE"; }
+  .panel details.group > div { padding-top: 12px; }
+  .hint { font-size: 12px; color: var(--ink-soft); margin: -4px 0 10px; }
+
+  /* the tabs */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button {
+    border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0;
+    margin-bottom: -1px; background: none; font-size: 13px; color: var(--ink-soft); padding: 8px 12px;
+  }
+  .tabs button[aria-selected="true"] {
+    background: #fff; border-color: var(--line); color: var(--ink); font-weight: 600;
+  }
+  .tabpage { display: none; }
+  .tabpage.on { display: block; }
 
   .results { display: flex; flex-wrap: wrap; gap: 0 28px; margin: 0 0 14px; padding: 0; list-style: none; }
   .results li { margin: 0 0 8px; }
   .results .k { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
   .results .v { font-size: 20px; font-variant-numeric: tabular-nums; }
-  .results .v small { font-size: 12px; color: var(--ink-soft); font-weight: 400; }
 
-  #chart { width: 100%; height: 460px; }
+  .charts { display: flex; flex-wrap: wrap; gap: 16px; }
+  .charts > div { flex: 1 1 380px; min-width: 0; }
+  .chart { width: 100%; height: 440px; }
+  h2.sub { font-size: 13px; font-weight: 650; margin: 0 0 6px; }
+
   .note {
     border: 1px solid var(--line); border-left: 3px solid var(--ink-soft);
     background: var(--panel); padding: 10px 12px; border-radius: 4px;
-    font-size: 13px; color: var(--ink-soft); margin: 16px 0 0;
+    font-size: 13px; color: var(--ink-soft); margin: 14px 0 0;
   }
   .note.warn { background: var(--warn-bg); border-left-color: var(--warn-line); color: #6b4b00; }
   .note.error { background: #fff1f0; border-left-color: #d1242f; color: #8b1a1f; }
   .note b { color: inherit; }
-  table.curve { border-collapse: collapse; font-size: 13px; margin-top: 14px; width: 100%; max-width: 420px; }
-  table.curve th, table.curve td { text-align: right; padding: 3px 10px 3px 0; font-variant-numeric: tabular-nums; }
-  table.curve th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--line); }
-  details { margin-top: 14px; font-size: 13px; color: var(--ink-soft); }
-  summary { cursor: pointer; }
+  .caption { font-size: 12px; color: var(--ink-soft); margin: 10px 0 0; }
+
+  table.data { border-collapse: collapse; font-size: 13px; margin-top: 12px; width: 100%; }
+  table.data th, table.data td { text-align: right; padding: 4px 10px 4px 0; font-variant-numeric: tabular-nums; }
+  table.data th { color: var(--ink-soft); font-weight: 600; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.data td:first-child, table.data th:first-child { text-align: left; }
+  table.data tr.best td { font-weight: 650; }
+
+  details.more { margin-top: 14px; font-size: 13px; color: var(--ink-soft); }
+  details.more summary { cursor: pointer; }
   footer { border-top: 1px solid var(--line); padding: 14px 20px; font-size: 12px; color: var(--ink-soft); }
   @media (max-width: 760px) {
     .panel { flex: 1 1 100%; border-right: none; border-bottom: 1px solid var(--line); min-height: 0; }
@@ -106,7 +143,7 @@
 
 <header>
   <h1>Integrated Well Modelling Tool</h1>
-  <span class="sub">Inflow performance &mdash; early version</span>
+  <span class="sub">Nodal analysis in your browser</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -122,203 +159,465 @@
 <div class="layout">
   <form class="panel" id="panel" autocomplete="off">
 
-    <fieldset>
-      <legend>Reservoir</legend>
-      <label>Fluid
-        <select id="fluid_type">
-          <option value="oil">Oil and water</option>
-          <option value="gas">Gas</option>
-        </select>
-      </label>
-      <div class="row">
-        <label>Static reservoir pressure <span class="u" data-unit="pressure"></span>
-          <input type="number" id="p_res" value="3000" step="50" min="1">
-        </label>
-        <label>Temperature <span class="u" data-unit="temperature"></span>
-          <input type="number" id="t_res" value="200" step="5">
-        </label>
-      </div>
-    </fieldset>
-
-    <!-- ---------------- OIL ---------------- -->
-    <fieldset id="g-oil">
-      <legend>Inflow model (oil)</legend>
-      <label>Model
-        <select id="oil_ipr">
-          <option value="pi">Productivity index (PI)</option>
-          <option value="vogel">Vogel (one flowing test)</option>
-          <option value="darcy">Darcy from rock properties</option>
-          <option value="fetkovich">Fetkovich (two flowing tests)</option>
-        </select>
-      </label>
-
-      <label id="f-pi">Productivity index <span class="u" data-unit="pi"></span>
-        <input type="number" id="pi" value="3" step="0.1" min="0.0001">
-      </label>
-
-      <div id="f-vogel" class="row">
-        <label>Test rate <span class="u" data-unit="liquidRate"></span>
-          <input type="number" id="vogel_q" value="2000" step="100" min="0.001">
-        </label>
-        <label>Test Pwf <span class="u" data-unit="pressure"></span>
-          <input type="number" id="vogel_pwf" value="2000" step="50" min="0">
-        </label>
-      </div>
-
-      <div id="f-fet">
-        <div class="row">
-          <label>Test 1 rate <span class="u" data-unit="liquidRate"></span>
-            <input type="number" id="fet_q1" value="1000" step="100" min="0.001">
-          </label>
-          <label>Test 1 Pwf <span class="u" data-unit="pressure"></span>
-            <input type="number" id="fet_pwf1" value="2500" step="50" min="0">
-          </label>
-        </div>
-        <div class="row">
-          <label>Test 2 rate <span class="u" data-unit="liquidRate"></span>
-            <input type="number" id="fet_q2" value="2000" step="100" min="0.001">
-          </label>
-          <label>Test 2 Pwf <span class="u" data-unit="pressure"></span>
-            <input type="number" id="fet_pwf2" value="1800" step="50" min="0">
-          </label>
-        </div>
-      </div>
-
-      <div id="f-darcy">
-        <div class="row">
-          <label>Permeability k <span class="u" data-unit="permeability"></span>
-            <input type="number" id="oil_k" value="50" step="5" min="0.0001">
-          </label>
-          <label>Net thickness h <span class="u" data-unit="length"></span>
-            <input type="number" id="oil_h" value="20" step="5" min="0.0001">
-          </label>
-        </div>
-        <div class="row">
-          <label>Bo <span class="u" data-unit="fvf"></span>
-            <input type="number" id="oil_bo" value="1.25" step="0.01" min="0.0001">
-          </label>
-          <label>Oil viscosity <span class="u" data-unit="viscosity"></span>
-            <input type="number" id="oil_mu" value="0.8" step="0.1" min="0.0001">
-          </label>
-        </div>
-        <div class="row">
-          <label>Drainage radius re <span class="u" data-unit="length"></span>
-            <input type="number" id="oil_re" value="1000" step="50" min="0.01">
-          </label>
-          <label>Wellbore radius rw <span class="u" data-unit="length"></span>
-            <input type="number" id="oil_rw" value="0.354" step="0.01" min="0.001">
-          </label>
-        </div>
-        <label>Skin
-          <input type="number" id="oil_skin" value="0" step="0.5">
-        </label>
-        <label>Flow regime
-          <select id="oil_regime">
-            <option value="pseudosteady">Pseudosteady state (closed drainage area)</option>
-            <option value="steady">Steady state (pressure held at re)</option>
-            <option value="transient">Transient (infinite acting, at a time)</option>
+    <!-- ============== RESERVOIR AND IPR ============== -->
+    <details class="group" id="grp-ipr" open>
+      <summary>Reservoir and IPR</summary>
+      <div>
+        <label>Fluid
+          <select id="fluid_type">
+            <option value="oil">Oil and water</option>
+            <option value="gas">Gas</option>
           </select>
         </label>
-        <div id="f-transient" class="row">
-          <label>Porosity <span class="u" data-unit="fraction"></span>
-            <input type="number" id="oil_phi" value="0.2" step="0.01" min="0.001" max="1">
+        <div class="row">
+          <label>Static reservoir pressure <span class="u" data-unit="pressure"></span>
+            <input type="number" id="p_res" value="3000" step="50" min="1">
           </label>
-          <label>ct <span class="u" data-unit="compressibility"></span>
-            <input type="number" id="oil_ct" value="0.00001" step="0.000001" min="0.0000001">
+          <label>Temperature <span class="u" data-unit="temperature"></span>
+            <input type="number" id="t_res" value="200" step="5">
           </label>
-          <label>Time <span class="u" data-unit="time"></span>
-            <input type="number" id="oil_time" value="12" step="1" min="0.01">
+        </div>
+
+        <!-- ---------------- OIL ---------------- -->
+        <div id="g-oil">
+          <label>Inflow model
+            <select id="oil_ipr">
+              <option value="pi">Productivity index (PI)</option>
+              <option value="vogel">Vogel (one flowing test)</option>
+              <option value="darcy">Darcy from rock properties</option>
+              <option value="fetkovich">Fetkovich (two flowing tests)</option>
+            </select>
+          </label>
+
+          <label id="f-pi">Productivity index <span class="u" data-unit="pi"></span>
+            <input type="number" id="pi" value="3" step="0.1" min="0.0001">
+          </label>
+
+          <div id="f-vogel" class="row">
+            <label>Test rate <span class="u" data-unit="liquidRate"></span>
+              <input type="number" id="vogel_q" value="2000" step="100" min="0.001">
+            </label>
+            <label>Test Pwf <span class="u" data-unit="pressure"></span>
+              <input type="number" id="vogel_pwf" value="2000" step="50" min="0">
+            </label>
+          </div>
+
+          <div id="f-fet">
+            <div class="row">
+              <label>Test 1 rate <span class="u" data-unit="liquidRate"></span>
+                <input type="number" id="fet_q1" value="1000" step="100" min="0.001">
+              </label>
+              <label>Test 1 Pwf <span class="u" data-unit="pressure"></span>
+                <input type="number" id="fet_pwf1" value="2500" step="50" min="0">
+              </label>
+            </div>
+            <div class="row">
+              <label>Test 2 rate <span class="u" data-unit="liquidRate"></span>
+                <input type="number" id="fet_q2" value="2000" step="100" min="0.001">
+              </label>
+              <label>Test 2 Pwf <span class="u" data-unit="pressure"></span>
+                <input type="number" id="fet_pwf2" value="1800" step="50" min="0">
+              </label>
+            </div>
+          </div>
+
+          <div id="f-darcy">
+            <div class="row">
+              <label>Permeability k <span class="u" data-unit="permeability"></span>
+                <input type="number" id="oil_k" value="50" step="5" min="0.0001">
+              </label>
+              <label>Net thickness h <span class="u" data-unit="length"></span>
+                <input type="number" id="oil_h" value="20" step="5" min="0.0001">
+              </label>
+            </div>
+            <div class="row">
+              <label>Bo <span class="u" data-unit="fvf"></span>
+                <input type="number" id="oil_bo" value="1.25" step="0.01" min="0.0001">
+              </label>
+              <label>Oil viscosity <span class="u" data-unit="viscosity"></span>
+                <input type="number" id="oil_mu" value="0.8" step="0.1" min="0.0001">
+              </label>
+            </div>
+            <div class="row">
+              <label>Drainage radius re <span class="u" data-unit="length"></span>
+                <input type="number" id="oil_re" value="1000" step="50" min="0.01">
+              </label>
+              <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+                <input type="number" id="oil_rw" value="0.354" step="0.01" min="0.001">
+              </label>
+            </div>
+            <label>Skin
+              <input type="number" id="oil_skin" value="0" step="0.5">
+            </label>
+            <label>Flow regime
+              <select id="oil_regime">
+                <option value="pseudosteady">Pseudosteady state (closed drainage area)</option>
+                <option value="steady">Steady state (pressure held at re)</option>
+                <option value="transient">Transient (infinite acting, at a time)</option>
+              </select>
+            </label>
+            <div id="f-transient" class="row">
+              <label>Porosity <span class="u" data-unit="fraction"></span>
+                <input type="number" id="oil_phi" value="0.2" step="0.01" min="0.001" max="1">
+              </label>
+              <label>ct <span class="u" data-unit="compressibility"></span>
+                <input type="number" id="oil_ct" value="0.00001" step="0.000001" min="0.0000001">
+              </label>
+              <label>Time <span class="u" data-unit="time"></span>
+                <input type="number" id="oil_time" value="12" step="1" min="0.01">
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---------------- GAS ---------------- -->
+        <div id="g-gas">
+          <label>Inflow model
+            <select id="gas_ipr">
+              <option value="jones">Jones (Darcy plus turbulence)</option>
+              <option value="darcy">Darcy (pressure squared)</option>
+              <option value="backpressure">Back pressure (C and n)</option>
+            </select>
+          </label>
+
+          <div id="f-gasrock">
+            <div class="row">
+              <label>Permeability k <span class="u" data-unit="permeability"></span>
+                <input type="number" id="gas_k" value="5" step="1" min="0.0001">
+              </label>
+              <label>Net thickness h <span class="u" data-unit="length"></span>
+                <input type="number" id="gas_h" value="40" step="5" min="0.0001">
+              </label>
+            </div>
+            <div class="row">
+              <label>Drainage radius re <span class="u" data-unit="length"></span>
+                <input type="number" id="gas_re" value="1000" step="50" min="0.01">
+              </label>
+              <label>Wellbore radius rw <span class="u" data-unit="length"></span>
+                <input type="number" id="gas_rw" value="0.354" step="0.01" min="0.001">
+              </label>
+            </div>
+            <div class="row">
+              <label>Skin
+                <input type="number" id="gas_skin" value="0" step="0.5">
+              </label>
+              <label id="f-beta">beta <span class="u" id="beta_unit"></span>
+                <input type="number" id="gas_beta" value="0" step="1000000" min="0">
+              </label>
+            </div>
+          </div>
+
+          <div id="f-bp" class="row">
+            <label>C <span class="u" id="bp_c_unit"></span>
+              <input type="number" id="bp_c" value="0.015" step="0.001" min="0.0000001">
+            </label>
+            <label>n
+              <input type="number" id="bp_n" value="0.85" step="0.01" min="0.01" max="1">
+            </label>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- ============== FLUID (PVT) ============== -->
+    <details class="group" id="grp-pvt">
+      <summary>Fluid (PVT)</summary>
+      <div>
+        <div id="pvt-oil">
+          <div class="row">
+            <label>Oil gravity <span class="u">API</span>
+              <input type="number" id="api" value="35" step="1" min="5" max="70">
+            </label>
+            <label>Solution gas gravity <span class="u">air = 1</span>
+              <input type="number" id="gas_sg" value="0.75" step="0.01" min="0.55" max="1.5">
+            </label>
+          </div>
+          <label>Solution GOR at bubble point <span class="u" data-unit="gor"></span>
+            <input type="number" id="rsb" value="500" step="10" min="1" max="5000">
+          </label>
+          <label>Total (producing) GOR <span class="u" data-unit="gor"></span>; 0 = same as solution GOR
+            <input type="number" id="oil_gor" value="0" step="10" min="0">
+          </label>
+          <div class="row">
+            <label>Water cut <span class="u">%</span>
+              <input type="number" id="water_cut" value="30" step="5" min="0" max="99">
+            </label>
+            <label>Water specific gravity <span class="u">fresh = 1</span>
+              <input type="number" id="water_sg" value="1.02" step="0.01" min="1" max="1.25">
+            </label>
+          </div>
+          <label>Measured bubble point <span class="u" data-unit="pressure"></span>; 0 = calculate
+            <input type="number" id="pb_meas" value="0" step="50" min="0">
+          </label>
+          <label>Pb, Rs, Bo correlation
+            <select id="pvt_method">
+              <option value="glaso">Glaso</option>
+              <option value="standing">Standing</option>
+              <option value="lasater">Lasater</option>
+              <option value="petrosky">Petrosky and Farshad</option>
+            </select>
+          </label>
+          <label>Oil viscosity correlation
+            <select id="visc_method">
+              <option value="beal">Beal, Chew and Connally</option>
+              <option value="beggs">Beggs and Robinson</option>
+              <option value="petrosky">Petrosky and Farshad</option>
+            </select>
+          </label>
+          <p class="hint">Black-oil PVT. The bubble point used by the inflow model is shown with the results.</p>
+        </div>
+
+        <div id="pvt-gas">
+          <div class="row">
+            <label>Gas gravity <span class="u">air = 1</span>
+              <input type="number" id="gas_sg_g" value="0.65" step="0.01" min="0.5" max="1.5">
+            </label>
+            <label>Water specific gravity <span class="u">fresh = 1</span>
+              <input type="number" id="water_sg_g" value="1.02" step="0.01" min="1" max="1.25">
+            </label>
+          </div>
+          <div class="row">
+            <label>Condensate-gas ratio <span class="u">STB/MMscf</span>; 0 = dry
+              <input type="number" id="cgr" value="0" step="5" min="0" max="1000">
+            </label>
+            <label>Condensate gravity <span class="u">API</span>
+              <input type="number" id="cond_api" value="50" step="1" min="30" max="70">
+            </label>
+          </div>
+          <div class="row">
+            <label>Water-gas ratio <span class="u">STB/MMscf</span>
+              <input type="number" id="wgr" value="0" step="1" min="0" max="1000">
+            </label>
+            <label>H2S <span class="u">mole %</span>
+              <input type="number" id="y_h2s" value="0" step="0.5" min="0" max="50">
+            </label>
+            <label>CO2 <span class="u">mole %</span>
+              <input type="number" id="y_co2" value="0" step="0.5" min="0" max="50">
+            </label>
+          </div>
+          <label>Gas viscosity correlation
+            <select id="gas_visc">
+              <option value="lee">Lee, Gonzalez and Eakin</option>
+              <option value="carr">Carr, Kobayashi and Burrows</option>
+            </select>
           </label>
         </div>
       </div>
+    </details>
 
-      <label id="f-pb">Bubble point <span class="u" data-unit="pressure"></span>
-        <input type="number" id="pb" value="2484" step="25" min="0">
+    <!-- ============== EQUIPMENT ============== -->
+    <details class="group" id="grp-equip">
+      <summary>Equipment</summary>
+      <div>
+        <label>Well path
+          <select id="survey_mode">
+            <option value="vertical">Vertical</option>
+            <option value="deviated">Deviated / horizontal (MD, TVD table)</option>
+          </select>
+        </label>
+        <label id="f-depth">Perforation depth, MD = TVD <span class="u" data-unit="length"></span>
+          <input type="number" id="depth" value="8000" step="100" min="500" max="40000">
+        </label>
+        <div id="f-survey">
+          <label>Survey: measured depth and true vertical depth, one pair per line
+            <textarea id="survey_text" rows="5">0 0
+2000 2000
+6000 5500
+9000 7000</textarea>
+          </label>
+          <p class="hint">Two numbers per line, separated by a space, tab, comma or semicolon. The first
+            line is the wellhead, the last line the perforations. Paste two columns straight from a
+            spreadsheet. Depths are in the unit shown above for length.</p>
+        </div>
+        <p class="hint">The perforation depth is the reference depth for reservoir pressure and temperature.</p>
+        <div class="row">
+          <label>Tubing inner diameter <span class="u">in</span>
+            <input type="number" id="tubing_id" value="2.992" step="0.1" min="0.5" max="12">
+          </label>
+          <label>Pipe roughness <span class="u">in</span>
+            <input type="number" id="roughness_in" value="0.0006" step="0.0001" min="0" max="0.1">
+          </label>
+        </div>
+        <label>Wellhead flowing pressure <span class="u" data-unit="pressure"></span>
+          <input type="number" id="p_wh" value="200" step="10" min="0">
+        </label>
+        <fieldset>
+          <legend>Temperature profile</legend>
+          <div class="row">
+            <label>Ambient at surface <span class="u" data-unit="temperature"></span>
+              <input type="number" id="t_amb_surface" value="80" step="5">
+            </label>
+            <label>U at surface <span class="u">Btu/h/ft2/F</span>
+              <input type="number" id="u_surface" value="5" step="0.5" min="0" max="50">
+            </label>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="perf_ambient_is_reservoir" checked>
+            Ambient at perforations = reservoir temperature
+          </label>
+          <div class="row">
+            <label id="f-tperf">Ambient at perforations <span class="u" data-unit="temperature"></span>
+              <input type="number" id="t_amb_perf" value="200" step="5">
+            </label>
+            <label>U at perforations <span class="u">Btu/h/ft2/F</span>
+              <input type="number" id="u_perf" value="5" step="0.5" min="0" max="50">
+            </label>
+          </div>
+        </fieldset>
+      </div>
+    </details>
+
+    <!-- ============== GAS LIFT ============== -->
+    <details class="group" id="grp-lift">
+      <summary>Gas lift (continuous)</summary>
+      <div>
+        <label>Artificial lift
+          <select id="lift">
+            <option value="none">None (natural flow)</option>
+            <option value="continuous">Continuous gas lift</option>
+          </select>
+        </label>
+        <div id="f-gl">
+          <p class="hint">The lift gas is injected at one depth (valve or orifice). Above that depth the
+            tubing carries the formation gas plus the lift gas, so the column is lighter.</p>
+          <div class="row">
+            <label>Gas injection rate <span class="u" data-unit="gasRate"></span>
+              <input type="number" id="gl_rate" value="1000" step="100" min="0">
+            </label>
+            <label>Injection depth <span class="u" data-unit="length"></span>
+              <input type="number" id="gl_md" value="6000" step="100" min="100">
+            </label>
+          </div>
+          <div class="row">
+            <label>Injection gas gravity <span class="u">air = 1</span>
+              <input type="number" id="gl_sg" value="0.65" step="0.01" min="0.55" max="1.5">
+            </label>
+            <label>Injection pressure at wellhead <span class="u" data-unit="pressure"></span>
+              <input type="number" id="gl_p_inj" value="1500" step="50" min="0">
+            </label>
+          </div>
+          <p class="hint">The injection pressure is only used to check that the casing gas pressure at the
+            injection depth is higher than the tubing pressure there. 0 = no check.</p>
+        </div>
+      </div>
+    </details>
+
+    <fieldset style="margin-top:14px">
+      <legend>VLP correlation</legend>
+      <label>
+        <select id="correlation">
+          <option value="beggs_brill">Beggs and Brill (1973)</option>
+          <option value="hagedorn_brown">Hagedorn and Brown (1965)</option>
+          <option value="gray">Gray (1974)</option>
+          <option value="orkiszewski">Orkiszewski (1967)</option>
+          <option value="ansari">Ansari and others (1994)</option>
+          <option value="duns_ros">Duns and Ros (1963)</option>
+          <option value="mukherjee_brill">Mukherjee and Brill (1985)</option>
+          <option value="fancher_brown">Fancher and Brown (1963) - no slip</option>
+        </select>
       </label>
     </fieldset>
 
-    <!-- ---------------- GAS ---------------- -->
-    <fieldset id="g-gas">
-      <legend>Inflow model (gas)</legend>
-      <label>Model
-        <select id="gas_ipr">
-          <option value="jones">Jones (Darcy plus turbulence)</option>
-          <option value="darcy">Darcy (pressure squared)</option>
-          <option value="backpressure">Back pressure (C and n)</option>
-        </select>
-      </label>
-      <div class="row">
-        <label>Gas gravity <span class="u">air = 1</span>
-          <input type="number" id="gas_sg_g" value="0.65" step="0.01" min="0.5" max="1.5">
-        </label>
-        <label>H2S <span class="u">fraction</span>
-          <input type="number" id="y_h2s" value="0" step="0.01" min="0" max="0.9">
-        </label>
-        <label>CO2 <span class="u">fraction</span>
-          <input type="number" id="y_co2" value="0" step="0.01" min="0" max="0.9">
-        </label>
-      </div>
-      <label>Gas viscosity correlation
-        <select id="gas_visc">
-          <option value="lee">Lee, Gonzalez and Eakin</option>
-          <option value="carr">Carr, Kobayashi and Burrows</option>
-        </select>
-      </label>
-
-      <div id="f-gasrock">
-        <div class="row">
-          <label>Permeability k <span class="u" data-unit="permeability"></span>
-            <input type="number" id="gas_k" value="5" step="1" min="0.0001">
-          </label>
-          <label>Net thickness h <span class="u" data-unit="length"></span>
-            <input type="number" id="gas_h" value="40" step="5" min="0.0001">
-          </label>
-        </div>
-        <div class="row">
-          <label>Drainage radius re <span class="u" data-unit="length"></span>
-            <input type="number" id="gas_re" value="1000" step="50" min="0.01">
-          </label>
-          <label>Wellbore radius rw <span class="u" data-unit="length"></span>
-            <input type="number" id="gas_rw" value="0.354" step="0.01" min="0.001">
-          </label>
-        </div>
-        <div class="row">
-          <label>Skin
-            <input type="number" id="gas_skin" value="0" step="0.5">
-          </label>
-          <label id="f-beta">beta <span class="u" id="beta_unit"></span>
-            <input type="number" id="gas_beta" value="0" step="1000000" min="0">
-          </label>
-        </div>
-      </div>
-
-      <div id="f-bp" class="row">
-        <label>C <span class="u" id="bp_c_unit"></span>
-          <input type="number" id="bp_c" value="0.015" step="0.001" min="0.0000001">
-        </label>
-        <label>n
-          <input type="number" id="bp_n" value="0.85" step="0.01" min="0.01" max="1">
-        </label>
-      </div>
-    </fieldset>
+    <button type="button" id="btn-calc" class="primary">Calculate</button>
   </form>
 
   <main class="main">
-    <ul class="results" id="results"></ul>
-    <div id="chart"></div>
-    <div id="messages"></div>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tab-nodal" aria-selected="true">IPR / VLP and P-T profiles</button>
+      <button type="button" role="tab" id="tab-sens" aria-selected="false">Sensitivity</button>
+      <button type="button" role="tab" id="tab-corr" aria-selected="false">VLP comparison</button>
+    </div>
 
-    <details>
-      <summary>The curve as numbers</summary>
-      <table class="curve" id="curve-table"></table>
-    </details>
+    <!-- ---------- the operating point ---------- -->
+    <section class="tabpage on" id="page-nodal">
+      <ul class="results" id="results"></ul>
+      <div id="messages"></div>
+      <div class="charts">
+        <div>
+          <h2 class="sub">IPR / VLP</h2>
+          <div class="chart" id="chart-nodal"></div>
+        </div>
+        <div>
+          <h2 class="sub">Pressure and temperature profile</h2>
+          <div class="chart" id="chart-profile"></div>
+        </div>
+      </div>
+      <p class="caption" id="profile-note"></p>
+      <details class="more">
+        <summary>The inflow curve as numbers</summary>
+        <table class="data" id="curve-table"></table>
+      </details>
+    </section>
 
-    <p class="note">
-      This early version draws the <b>inflow</b> only. The tubing side (VLP) and the operating point are
-      still being translated from the Python, so there is no intersection yet. The PVT and inflow
-      calculations behind this page have been checked against the Python engine over 12,527 cases; the
-      largest disagreement was 1.15e-14, which is rounding.
-    </p>
+    <!-- ---------- sensitivity ---------- -->
+    <section class="tabpage" id="page-sens">
+      <div class="row">
+        <label>Vary
+          <select id="sens_name"></select>
+        </label>
+        <label>Values, separated by commas
+          <input type="text" id="sens_values" value="">
+        </label>
+      </div>
+      <button type="button" id="btn-sens" class="primary">Run sensitivity</button>
+      <div id="sens-messages"></div>
+      <div class="charts">
+        <div>
+          <h2 class="sub">IPR / VLP for each value</h2>
+          <div class="chart" id="chart-sens-curves"></div>
+        </div>
+        <div>
+          <h2 class="sub">Operating point against the varied input</h2>
+          <div class="chart" id="chart-sens"></div>
+        </div>
+      </div>
+      <table class="data" id="sens-table"></table>
+    </section>
+
+    <!-- ---------- correlation comparison and matching ---------- -->
+    <section class="tabpage" id="page-corr">
+      <p class="caption">No correlation fits every well; only a measured flowing pressure can say which
+        one is right. This runs the well with every correlation and shows what each one gives and the
+        flow patterns it finds.</p>
+      <button type="button" id="btn-corr" class="primary">Compare all correlations</button>
+      <div id="corr-messages"></div>
+      <table class="data" id="corr-table"></table>
+
+      <details class="more" open>
+        <summary>Match from one measured test (one rate, one bottom-hole pressure)</summary>
+        <div class="row">
+          <label>Test rate <span class="u" id="match_q_unit"></span>
+            <input type="number" id="match_q" value="2000" step="100" min="0.001">
+          </label>
+          <label>Measured Pwf <span class="u" data-unit="pressure"></span>
+            <input type="number" id="match_pwf" value="2500" step="50" min="1">
+          </label>
+          <label>Fit
+            <select id="match_fit">
+              <option value="friction">Friction multiplier</option>
+              <option value="gravity">Gravity multiplier</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" id="btn-match">Find the multiplier</button>
+        <div id="match-messages"></div>
+      </details>
+
+      <fieldset style="margin-top:18px">
+        <legend>Multipliers in use</legend>
+        <div class="row">
+          <label>Gravity
+            <input type="number" id="gravity_mult" value="1" step="0.01" min="0.1" max="10">
+          </label>
+          <label>Friction
+            <input type="number" id="friction_mult" value="1" step="0.01" min="0.1" max="10">
+          </label>
+        </div>
+        <button type="button" id="btn-reset-mult">Reset both to 1.00</button>
+        <p class="hint">These multiply the gravity and friction parts of the pressure drop everywhere in
+          the app, so the operating point on the first tab uses them too.</p>
+      </fieldset>
+    </section>
   </main>
 </div>
 

@@ -8,18 +8,26 @@ This folder is the app rewritten to run **inside the browser**, with no server. 
 point: a page made of files cannot go to sleep, so it opens instantly, it is free to host forever,
 and it costs nothing no matter how many people use it.
 
-The Streamlit version in the folder above still works and is still the reference. Nothing here
-replaces it yet.
+The Streamlit version in the folder above still works and is still the reference: every number this
+page produces is checked against it (see below).
+
+**What the page does now:** the inflow (IPR) for every model, the tubing (VLP) with all eight
+correlations, the operating point where they cross, the pressure and temperature profile down the
+well, continuous gas lift, sensitivities on one input at a time, a comparison of all eight
+correlations side by side, and VLP matching from a measured flowing pressure - in oilfield or metric
+units. Still to come: the gas lift valve design, the ESP design, PVT matching to laboratory data,
+horizontal-well and multilayer inflow on the screen (the engine behind them is already translated),
+and the survey table as a table rather than pasted text.
 
 ## What is here so far
 
 | File | What it is |
 |---|---|
-| `index.html` | the page: the input panel, the chart area and the results |
-| `app.js` | wiring only - reads the boxes, calls the engine, draws the chart. No engineering in it |
+| `index.html` | the page: the input panel on the left, three tabs on the right |
+| `app.js` | wiring only - reads the boxes, calls the engine, draws the charts. No engineering in it |
 | `pvt.js` | translation of `pvt.py`: bubble point, Rs, Bo, oil and gas viscosity, Z, water |
 | `ipr.js` | translation of `ipr.py`: PI, Vogel, Darcy (3 regimes), Fetkovich, gas Darcy / Jones / back pressure, horizontal wells, multilayer |
-| `vlp.js` | translation of `vlp.py`, **in progress**: all eight gradient correlations - friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros, Ansari, Mukherjee and Brill, Fancher and Brown |
+| `vlp.js` | translation of `vlp.py`: the fluids, the pressure traverse and all eight gradient correlations - friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros, Ansari, Mukherjee and Brill, Fancher and Brown |
 | `well.js` | translation of `well.py`: the survey, cutting the well into steps, the temperature profile |
 | `nodal.js` | translation of `nodal.py`: the operating point, VLP matching, sensitivities |
 | `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
@@ -27,7 +35,7 @@ replaces it yet.
 | `tools/dump_nodal.py` | the same for the nodal analysis: operating points, matching, sensitivities |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
-| `tools/test_page_units.mjs` | drives the real page in a real browser and checks that switching system does not change the well |
+| `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey and a bad input (78 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
 cross-checked before the next begins:
@@ -44,14 +52,15 @@ After that: gas lift, PVT matching, and the rest of the screens.
 
 ## How the JavaScript is kept honest
 
-The Python engine was checked against the SPE papers and against a commercial package. Rather than
-repeat that work, the JavaScript is checked against the **Python**:
+The Python engine was checked against the SPE papers and against published reference cases. Rather
+than repeat that work, the JavaScript is checked against the **Python**:
 
 ```
 cd docs
 PYTHONPATH=.. python3 tools/dump_pvt.py tools/pvt_expected.json
 PYTHONPATH=.. python3 tools/dump_ipr.py tools/ipr_expected.json
 PYTHONPATH=.. python3 tools/dump_vlp.py tools/vlp_expected.json
+python3 tools/dump_nodal.py tools/nodal_expected.json
 node tools/crosscheck.mjs
 ```
 
