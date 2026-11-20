@@ -112,14 +112,14 @@ check("the profile note reports the gravity/friction split", profNote.includes("
 check("the profile note lists flow patterns", /\d+ %/.test(profNote), profNote.slice(-90));
 
 // ---- 3. a second correlation gives a different answer, as it must ----
-await page.selectOption("#correlation", "hagedorn_brown");
+// Orkiszewski is offered for an oil well but is not the one the app suggests for 35 API
+await page.selectOption("#correlation", "orkiszewski");
 await page.click("#btn-calc");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                            null, { timeout: 30000 });
 const q2 = numberFrom(await results(), "Rate (");
-check("Hagedorn and Brown gives a different rate", Number.isFinite(q2) && Math.abs(q2 - q) > 1,
+check("another correlation gives a different rate", Number.isFinite(q2) && Math.abs(q2 - q) > 1,
       `${q2} vs ${q} STB/d`);
-await page.selectOption("#correlation", "beggs_brill");
 
 // ---- 4. a deviated survey ----
 await page.selectOption("#survey_mode", "deviated");
@@ -174,35 +174,171 @@ check("every value flows at these starting values", flowed.length === 4, sensRat
 check("a higher wellhead pressure gives a lower rate",
       flowed.every((v, i) => i === 0 || v < flowed[i - 1]), sensRates.join(" | "));
 
-// ---- 7. the correlation comparison and matching ----
+// ---- 7a. the correlation is chosen for the well, with a reason ----
+const whyText = () => page.$eval("#corr-why", (n) => n.innerText);
+const whyClass = () => page.$eval("#corr-why", (n) => n.className);
+// section 3 chose a correlation by hand, which stops the app moving the box; put it back on auto
+if (!(await page.$eval("#btn-follow", (n) => n.classList.contains("hidden")))) {
+  await page.click("#btn-follow");
+  await page.waitForTimeout(250);
+}
+check("the correlation box starts on the app's suggestion",
+      (await val("correlation")) === "hagedorn_brown", await val("correlation"));
+const offered = await page.$$eval("#correlation option", (os) => os.map((o) => o.value));
+check("Gray is not offered for an oil well", !offered.includes("gray"), offered.join(","));
+check("the seven that apply are offered", offered.length === 7, offered.join(","));
+check("the advice names the correlation first",
+      (await whyText()).startsWith("Hagedorn and Brown"), (await whyText()).slice(0, 60));
+check("the advice says it suits this well", (await whyText()).includes("looks well suited"));
+check("the advice always points at measured data",
+      (await whyText()).includes("downhole pressure gauge") && (await whyText()).includes("gradient survey"));
+check("a well-suited correlation is marked good", (await whyClass()).includes("good"), await whyClass());
+
+// a deviated well must change the suggestion to the one made for any angle
+await page.selectOption("#survey_mode", "deviated");
+await page.waitForTimeout(250);
+check("a deviated well is given Mukherjee and Brill",
+      (await val("correlation")) === "mukherjee_brill", await val("correlation"));
+check("the reason says it is made for any angle",
+      (await whyText()).includes("any angle"), (await whyText()).slice(0, 90));
+await page.selectOption("#survey_mode", "vertical");
+await page.waitForTimeout(250);
+
+// a high water cut must turn Duns and Ros to caution
+await page.selectOption("#correlation", "duns_ros");
+await page.waitForTimeout(200);
+check("choosing by hand stops the box moving", (await val("correlation")) === "duns_ros");
+check("it says Duns and Ros may not suit a 30 % water well",
+      (await whyText()).includes("may not suit") && (await whyText()).includes("less than 10 % water"),
+      (await whyText()).slice(0, 130));
+check("a doubtful correlation is marked caution", (await whyClass()).includes("caution"));
+check("it still offers the app's own suggestion",
+      (await page.$eval("#btn-follow", (n) => n.innerText)).includes("Hagedorn and Brown"),
+      await page.$eval("#btn-follow", (n) => n.innerText));
+await page.click("#btn-follow");
+await page.waitForTimeout(250);
+check("the button puts the suggestion back", (await val("correlation")) === "hagedorn_brown");
+check("and the button goes away", await page.$eval("#btn-follow", (n) => n.classList.contains("hidden")));
+
+// heavy oil: Orkiszewski's own paper found it best there, so its advice must say so.  (It does not
+// become the suggestion: Hagedorn and Brown is rated just as well in a vertical well and comes
+// first in the preference order, exactly as in the Python.)
+await setVal("api", "15");
+await page.selectOption("#correlation", "orkiszewski");
+await page.waitForTimeout(250);
+check("heavy oil makes Orkiszewski well suited",
+      (await whyText()).includes("looks well suited") && (await whyText()).includes("heavy oil"),
+      (await whyText()).slice(0, 110));
+check("and it is marked good", (await whyClass()).includes("good"), await whyClass());
+await setVal("api", "35");
+await page.waitForTimeout(250);
+check("at 35 API it is only usable, not well suited",
+      (await whyText()).includes("should be usable"), (await whyText()).slice(0, 90));
+await page.click("#btn-follow");
+await page.waitForTimeout(250);
+
+// a gas well must be given Gray
+await page.selectOption("#fluid_type", "gas");
+await page.waitForTimeout(250);
+check("a gas well is given Gray", (await val("correlation")) === "gray", await val("correlation"));
+await setVal("cgr", "200");
+await page.waitForTimeout(250);
+check("a very wet gas turns Gray to caution and moves away from it",
+      (await val("correlation")) !== "gray", await val("correlation"));
+check("the reason gives the condensate limit",
+      (await whyText()).includes("50 STB/MMscf") || (await whyText()).includes("liquid dropout"),
+      (await whyText()).slice(0, 130));
+await setVal("cgr", "0");
+await page.selectOption("#fluid_type", "oil");
+await page.waitForTimeout(250);
+
+// ---- 7b. comparing the correlations with measured data ----
 await page.click("#tab-corr");
 await page.waitForTimeout(150);
-await page.click("#btn-corr");
-await page.waitForFunction(() => document.querySelector("#btn-corr").textContent === "Compare all correlations",
-                           null, { timeout: 120000 });
-await page.waitForTimeout(300);
-const corrRows = await page.$$eval("#corr-table tr", (rs) => rs.length);
-check("every correlation is in the table", corrRows === 9, `${corrRows} rows incl. header`);
-const corrRates = await page.$$eval("#corr-table tr td:nth-child(2)",
-                                    (ts) => ts.map((t) => Number(t.textContent.replace(/,/g, ""))));
-check("all eight give a rate", corrRates.filter((v) => v > 0).length === 8, corrRates.join(","));
-check("they do not all agree (the spread is the point)",
-      new Set(corrRates.map((v) => Math.round(v))).size > 3, corrRates.join(","));
-const patterns = await page.$eval("#corr-table tr:nth-child(2) td:nth-child(4)", (n) => n.textContent);
-check("the flow patterns are listed", /\d+ %/.test(patterns), patterns);
+const ticks = await page.$$eval("#vc-corrs input", (ns) => ns.map((n) => n.id));
+check("one tick box per correlation the fluid offers", ticks.length === 7, ticks.join(","));
+check("they all start ticked",
+      (await page.$$eval("#vc-corrs input:checked", (ns) => ns.length)) === 7);
+check("the gas lift boxes are grey when there is no gas lift",
+      await page.$eval("#vc_gl_rate", (n) => n.disabled));
+check("and the page says why",
+      (await page.$eval("#vc-gl-note", (n) => n.innerText)).includes("grey"));
 
-await setVal("match_q", "2000");
-await setVal("match_pwf", "2500");
+// no data yet: it must say so, not break
+await page.click("#btn-compare");
+await page.waitForTimeout(1500);
+check("with no measured data it asks for some",
+      (await page.$eval("#corr-messages", (n) => n.innerText)).includes("at least one measured point"),
+      (await page.$eval("#corr-messages", (n) => n.innerText)).slice(0, 90));
+
+// A two-point gradient survey that IS what Beggs and Brill calculates for these test conditions
+// (1,084 psig at 4,000 ft and 2,379 psig at 8,000 ft, worked out from the engine itself).  Feeding
+// the page its own answer is the one case where the right result is known in advance: Beggs and
+// Brill must come out closest, with an error of a few psi at most.
+await setVal("vc_points", "4000 1084\n8000 2379");
+await setVal("vc_p_wh", "200");
+await setVal("vc_rate", "2000");
+await page.click("#btn-compare");
+await page.waitForFunction(() => document.querySelector("#btn-compare").textContent === "Compare with the measured data",
+                           null, { timeout: 180000 });
+await page.waitForTimeout(400);
+const cmpRows = await page.$$eval("#corr-table tr", (rs) => rs.length);
+check("every ticked correlation is in the table", cmpRows === 8, `${cmpRows} rows incl. header`);
+const rmsCol = await page.$$eval("#corr-table tr td:nth-child(4)",
+                                 (ts) => ts.map((t) => Number(t.textContent.replace(/,/g, ""))));
+check("every one reports an RMS error", rmsCol.filter((v) => Number.isFinite(v)).length >= 7,
+      rmsCol.join(","));
+const cmpNote = await page.$eval("#corr-note", (n) => n.innerText);
+check("the closest correlation is named", cmpNote.includes("Closest to the measured data"),
+      cmpNote.slice(0, 150));
+check("the data came from Beggs and Brill, so that is the closest",
+      cmpNote.includes("Closest to the measured data: Beggs and Brill"), cmpNote.slice(0, 160));
+const bbRms = await page.$$eval("#corr-table tr", (rs) => {
+  const row = rs.find((r) => r.children[0] && r.children[0].textContent.startsWith("Beggs and Brill"));
+  return row ? Number(row.children[3].textContent.replace(/,/g, "")) : NaN;
+});
+check("and it reproduces its own survey to within a few psi", bbRms < 5, `RMS ${bbRms} psi`);
+check("the sign convention is explained", cmpNote.includes("over-predicts"));
+const surveyPlot = await plotOf("chart-survey");
+check("the chart shows the measured points", surveyPlot.traces.at(-1).name === "Measured");
+check("and one line per correlation", surveyPlot.traces.length === 8,
+      `${surveyPlot.traces.length} traces`);
+check("depth runs downwards there too", surveyPlot.layout.yaxis.autorange === "reversed");
+
+// ---- 7c. matching the chosen correlation to that data ----
+await page.selectOption("#correlation", "duns_ros");
+await page.waitForTimeout(200);
+await page.selectOption("#match_fit", "both");
 await page.click("#btn-match");
-await page.waitForTimeout(3000);
+await page.waitForFunction(() => !document.querySelector("#btn-match").disabled,
+                           null, { timeout: 180000 });
+await page.waitForTimeout(300);
 const matchNote = await page.$eval("#match-messages", (n) => n.innerText);
-check("the match reports a multiplier or says why not", matchNote.length > 20, matchNote.slice(0, 110));
-if (matchNote.includes("multiplier that reproduces")) {
-  const m = Number(await val("friction_mult"));
-  check("the multiplier landed in the box", m > 0.5 && m < 2.0, `${m}`);
-  await page.click("#btn-reset-mult");
-  check("reset puts it back to 1", (await val("friction_mult")) === "1");
-}
+check("the match reports both multipliers and the error before and after",
+      matchNote.includes("gravity x") && matchNote.includes("friction x")
+        && matchNote.includes("root-mean-square"), matchNote.slice(0, 170));
+const gm = Number(await val("gravity_mult"));
+const fm = Number(await val("friction_mult"));
+check("the multipliers landed in the boxes", gm >= 0.1 && gm <= 10 && fm >= 0.1 && fm <= 10,
+      `gravity ${gm}, friction ${fm}`);
+// matching must have made the fit better, which is the only claim worth making about it
+const rmsPair = matchNote.match(/from ([\d,]+) to ([\d,]+)/);
+check("the match improved the fit", rmsPair
+        && Number(rmsPair[2].replace(/,/g, "")) <= Number(rmsPair[1].replace(/,/g, "")),
+      rmsPair ? rmsPair.slice(1).join(" -> ") : matchNote.slice(0, 90));
+// and the matched run must appear in the comparison, so it can be judged against the rest
+await page.click("#btn-compare");
+await page.waitForFunction(() => document.querySelector("#btn-compare").textContent === "Compare with the measured data",
+                           null, { timeout: 180000 });
+await page.waitForTimeout(400);
+const labels = await page.$$eval("#corr-table tr td:first-child", (ts) => ts.map((t) => t.textContent));
+check("the matched correlation is shown alongside the published ones",
+      labels.some((t) => t.includes("matched")), labels.join(" | "));
+await page.click("#btn-reset-mult");
+check("reset puts the multipliers back to 1",
+      (await val("gravity_mult")) === "1" && (await val("friction_mult")) === "1");
+await page.selectOption("#correlation", "beggs_brill");
+await page.waitForTimeout(200);
 
 // ---- 8. a gas well, right through ----
 await page.click("#tab-nodal");
@@ -321,7 +457,10 @@ const defaults = { fluid_type: "oil", p_res: "3000", t_res: "200", oil_ipr: "pi"
                    gas_ipr: "jones", gas_sg_g: "0.65", gas_k: "5", gas_h: "40", gas_re: "1000",
                    gas_rw: "0.354", gas_skin: "0", gas_beta: "0", bp_c: "0.015", bp_n: "0.85",
                    survey_mode: "vertical", depth: "8000", tubing_id: "2.992",
-                   roughness_in: "0.0006", p_wh: "200", correlation: "beggs_brill",
+                   roughness_in: "0.0006", p_wh: "200",
+                   // the correlation box is not a default: the app chooses it from the well, and
+                   // for these inputs (35 API, 30 % water, vertical) that is Hagedorn and Brown
+                   correlation: "hagedorn_brown",
                    t_amb_surface: "80", u_surface: "5", u_perf: "5",
                    lift: "none", gl_rate: "1000", gl_md: "6000", gl_sg: "0.65", gl_p_inj: "1500",
                    gravity_mult: "1", friction_mult: "1" };

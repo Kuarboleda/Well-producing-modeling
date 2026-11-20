@@ -17,6 +17,7 @@ import * as vlp from "./vlp.js";
 import * as wellmod from "./well.js";
 import * as nodal from "./nodal.js";
 import * as units from "./units.js";
+import * as advice from "./advice.js";
 
 const CURVE_POINTS = 41;          // points along the inflow curve on its own
 const NODAL_POINTS = 25;          // points along each curve when the VLP is calculated too
@@ -89,10 +90,12 @@ const QUANTITY_OF = {
   perf_ambient_is_reservoir: null, t_amb_perf: "temperature", u_perf: null,
   // gas lift
   lift: null, gl_rate: "gasRate", gl_md: "length", gl_sg: null, gl_p_inj: "pressure",
+  // the VLP comparison with measured data
+  vc_p_wh: "pressure", vc_rate_type: null, vc_rate: "liquidRate", vc_wc: null, vc_gor: "gor",
+  vc_rate_gas: "gasRate", vc_cgr: null, vc_wgr: null,
+  vc_gl_rate: "gasRate", vc_gl_md: "length", vc_points: null,
   // matching
-  gravity_mult: null, friction_mult: null, match_pwf: "pressure",
-  match_q: null,                   // liquid or gas rate depending on the fluid: see rateQuantity()
-  match_fit: null,
+  gravity_mult: null, friction_mult: null, match_fit: null,
 };
 
 /** Every box on the page, in the order they are saved. */
@@ -159,6 +162,22 @@ function updateVisibility() {
   toggle("f-gasrock", gasModel !== "backpressure");
   toggle("f-beta", gasModel === "jones");
   toggle("f-bp", gasModel === "backpressure");
+
+  // the comparison tab: the test conditions follow the fluid, and the gas lift boxes are live only
+  // when the well is actually on continuous gas lift
+  toggle("vc-oil", oil);
+  toggle("vc-gas", !oil);
+  const onGasLift = oil && pick("lift") === "continuous";
+  for (const id of ["vc_gl_rate", "vc_gl_md"]) {
+    const node = document.getElementById(id);
+    if (node) /** @type {HTMLInputElement} */ (node).disabled = !onGasLift;
+  }
+  const glNote = document.getElementById("vc-gl-note");
+  if (glNote) {
+    glNote.textContent = onGasLift
+      ? "The test's own lift gas rate and injection depth, which may differ from the ones on the left."
+      : "The gas lift boxes are grey because the artificial lift is not continuous gas lift.";
+  }
 
   const vertical = pick("survey_mode") === "vertical";
   toggle("f-depth", vertical);
@@ -411,6 +430,73 @@ function buildCase() {
            rateUnit: "gasRate", gas_lift: null };
 }
 
+/**
+ * What advice.js needs to judge the correlations: the fluid, the water cut or condensate ratio, the
+ * oil gravity, and the well path.  Everything is in ENGINE units, as the Python's own inputs are.
+ * @returns {import("./advice.js").AdviceInputs}
+ */
+function adviceInputs() {
+  /** @type {number[]} */
+  let md = [];
+  /** @type {number[]} */
+  let tvd = [];
+  const mode = pick("survey_mode");
+  try {
+    [md, tvd] = mode === "vertical" ? wellmod.verticalSurvey(eng("depth")) : surveyFromText();
+  } catch {
+    md = [];                        // an unreadable survey counts as vertical, as it does in Python
+    tvd = [];
+  }
+  return { fluid_type: pick("fluid_type"), water_cut: num("water_cut") / 100.0, api: num("api"),
+           cgr: num("cgr"), survey_mode: md.length >= 2 ? mode : "vertical", md, tvd };
+}
+
+/**
+ * Keep the correlation box on the app's suggestion until the user chooses one by hand.
+ *
+ * The suggestion comes from the fluid, the water cut, the oil gravity and the well path, so it moves
+ * as those are typed - which is the point: the box should already hold the sensible choice before
+ * anyone thinks about it.  Once the user picks a correlation themselves, the app stops moving the box
+ * and offers a button to go back to its own suggestion instead.
+ */
+let correlationPickedByHand = false;
+
+function updateCorrelationAdvice() {
+  const inputs = adviceInputs();
+  const [suggested] = advice.recommend_correlation(inputs);
+  const box = /** @type {HTMLSelectElement} */ (el("correlation"));
+  if (!correlationPickedByHand) box.value = suggested;
+  const key = box.value;
+
+  const judged = advice.correlation_advice(inputs)[key];
+  if (!judged) return;              // not a correlation for this fluid: the box is about to be refilled
+  const rating = judged.rating;
+  const why = document.getElementById("corr-why");
+  if (why) {
+    why.className = `advice ${rating}`;
+    // the heading is the correlation's own name, then why it may or may not suit this well
+    const text = advice.correlation_caption(inputs, key);
+    const name = advice.nameOf(key);
+    why.innerHTML = `<b>${name}</b>${escapeHtml(text.slice(name.length))}`;
+  }
+  const follow = /** @type {HTMLButtonElement} */ (el("btn-follow"));
+  const show = correlationPickedByHand && key !== suggested;
+  follow.classList.toggle("hidden", !show);
+  follow.textContent = show
+    ? `Use the app's suggestion (${advice.nameOf(suggested)})`
+    : "";
+  const detail = document.getElementById("corr-detail");
+  const detailBox = document.getElementById("corr-detail-box");
+  const text = advice.correlation_detail(key, pick("fluid_type") === "oil");
+  if (detail) detail.textContent = text;
+  if (detailBox) detailBox.classList.toggle("hidden", !text);
+}
+
+/** Text going into innerHTML. @param {string} text */
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** The survey table as two lists of depths, converted into feet. @returns {[number[], number[]]} */
 function surveyFromText() {
   const [md, tvd] = wellmod.parseSurveyText(/** @type {HTMLTextAreaElement} */ (el("survey_text")).value);
@@ -505,6 +591,7 @@ let lastCase = null;
  */
 function recalculate() {
   updateVisibility();
+  updateCorrelationAdvice();
   let c;
   try {
     c = buildCase();
@@ -936,92 +1023,324 @@ function sensitivityNow() {
 }
 
 // ---------------------------------------------------------------------
-// The third tab: every correlation, and matching
+// The third tab: compare the correlations with measured data, and match one to it
 // ---------------------------------------------------------------------
 
-const CORRELATION_NAMES = {
-  beggs_brill: "Beggs and Brill", hagedorn_brown: "Hagedorn and Brown", gray: "Gray",
-  orkiszewski: "Orkiszewski", ansari: "Ansari and others", duns_ros: "Duns and Ros",
-  mukherjee_brill: "Mukherjee and Brill", fancher_brown: "Fancher and Brown (no slip)",
-};
+// the names live in advice.js, which is where the Streamlit app's own names were translated to
+const nameOf = advice.nameOf;
 
-function compareCorrelations() {
-  const button = /** @type {HTMLButtonElement} */ (el("btn-corr"));
+export const SURVEY_MAX_POINTS = 10;      // as many points as the Streamlit table holds
+
+/**
+ * The correlations offered for the fluid on screen, best first.  Gray is a gas-well correlation and
+ * is not offered for an oil well; the no-slip quality-check bound comes last, after the methods
+ * meant to be used.  This is the same split the Streamlit app makes.
+ */
+function correlationChoices() {
+  const isOil = pick("fluid_type") === "oil";
+  return [...(isOil ? advice.PREFERENCE_OIL : advice.PREFERENCE_GAS), ...advice.QC_ONLY];
+}
+
+/**
+ * Fill the correlation box with those choices.  If what was chosen is not among them any more - the
+ * fluid type has changed - the app's suggestion is taken instead, and the box goes back to following
+ * the suggestion, because the old choice said nothing about this fluid.
+ */
+function fillCorrelationChoices() {
+  const box = /** @type {HTMLSelectElement} */ (el("correlation"));
+  const keys = correlationChoices();
+  const before = box.value;
+  box.innerHTML = keys.map((k) => `<option value="${k}">${nameOf(k)}</option>`).join("");
+  if (keys.includes(before)) {
+    box.value = before;
+  } else {
+    correlationPickedByHand = false;
+    box.value = advice.recommend_correlation(adviceInputs())[0];
+  }
+}
+
+/** Build the tick boxes, one per correlation this fluid type offers. */
+function fillCorrelationTicks() {
+  const host = document.getElementById("vc-corrs");
+  if (!host) return;
+  const keys = correlationChoices();
+  const before = new Set([...host.querySelectorAll("input:checked")].map((n) => n.id));
+  const first = host.children.length === 0;
+  host.innerHTML = keys.map((k) => {
+    const id = `vc_on_${k}`;
+    // the first time, everything is ticked; afterwards the user's own choice is kept
+    const on = first || before.has(id) ? " checked" : "";
+    return `<label><input type="checkbox" id="${id}"${on}>${nameOf(k)}</label>`;
+  }).join("");
+}
+
+/** Which correlations are ticked. */
+function tickedCorrelations() {
+  const host = document.getElementById("vc-corrs");
+  if (!host) return [];
+  return [...host.querySelectorAll("input:checked")].map((n) => n.id.replace("vc_on_", ""));
+}
+
+/**
+ * The measured points, read from the text box: [depths in ft, pressures in psia], sorted by depth.
+ * This is survey_points() of app_helpers.py, with the same errors in the same words.
+ * @param {number} perf_md @returns {[number[], number[]]}
+ */
+function measuredPoints(perf_md) {
+  /** @type {[number, number][]} */
+  const points = [];
+  const lines = /** @type {HTMLTextAreaElement} */ (el("vc_points")).value.split(/\r?\n/);
+  let n = 0;
+  for (const line of lines) {
+    const parts = line.replace(/[,;]/g, " ").split(/\s+/).filter((t) => t.length > 0);
+    if (parts.length === 0) continue;
+    n += 1;
+    if (parts.length < 2) throw new Error(`Point ${n} needs both a depth and a pressure.`);
+    const d = Number(parts[0]);
+    const p = Number(parts[1]);
+    if (!Number.isFinite(d) || !Number.isFinite(p)) {
+      throw new Error(`Point ${n}: both the depth and the pressure must be numbers.`);
+    }
+    if (d < 0 || p <= 0) {
+      throw new Error(`Point ${n}: the depth must be 0 or more and the pressure above 0.`);
+    }
+    const depth = units.toEngine("length", d);
+    if (depth > perf_md + 1e-6) {
+      throw new Error(`Point ${n}: the depth ${show(d, 0)} ${units.unitOf("length")} is below the `
+        + `perforations (${show(units.fromEngine("length", perf_md), 0)} ${units.unitOf("length")}), `
+        + "where the calculation ends.");
+    }
+    points.push([depth, units.toEngine("pressure", p)]);
+  }
+  if (points.length === 0) {
+    throw new Error("Enter at least one measured point: a depth and a pressure.");
+  }
+  if (points.length > SURVEY_MAX_POINTS) {
+    throw new Error(`At most ${SURVEY_MAX_POINTS} measured points; there are ${points.length}.`);
+  }
+  points.sort((a, b) => a[0] - b[0]);
+  return [points.map((x) => x[0]), points.map((x) => x[1])];
+}
+
+/**
+ * The case as the TEST was flowing, not as the well is now: the test's wellhead pressure, rate,
+ * water cut and GOR (or condensate and water ratios), and its gas lift.  This is
+ * survey_test_inputs() of app_helpers.py.  The multipliers are left at 1.0, because the comparison is
+ * of the correlations as published.
+ * @returns {{c: Case, fluid: vlp.OilWaterFluid | vlp.GasFluid, rate: number}}
+ */
+function testCase() {
+  const c = buildCase();
+  c.gravity_mult = 1.0;
+  c.friction_mult = 1.0;
+  c.p_wh = eng("vc_p_wh");
+  let rate;
+  if (c.fluid_type === "oil") {
+    const wc = num("vc_wc") / 100.0;
+    if (!(wc >= 0.0 && wc < 1.0)) throw new Error("The water cut must be from 0 to below 100 %.");
+    const typed = eng("vc_rate");
+    if (!(typed > 0)) throw new Error("The test rate must be above 0.");
+    rate = pick("vc_rate_type") === "oil" ? typed / (1.0 - wc) : typed;
+    const oil = /** @type {vlp.OilWaterFluid} */ (c.fluid);
+    c.fluid = new vlp.OilWaterFluid({
+      api: oil.api, gas_sg: oil.gas_sg, rsb: oil.rsb, water_cut: wc,
+      gor: num("vc_gor") > 0 ? eng("vc_gor") : null, salinity: oil.salinity,
+      pb_meas: oil.pb_meas, pvt_method: oil.pvt_method, visc_method: oil.visc_method,
+      injection_gas_rate: c.gas_lift ? eng("vc_gl_rate") : 0.0,
+      injection_md: c.gas_lift ? eng("vc_gl_md") : null,
+      injection_gas_sg: c.gas_lift ? c.gas_lift.sg : null,
+    });
+    if (c.gas_lift) c.gas_lift = { ...c.gas_lift, rate: eng("vc_gl_rate"), md: eng("vc_gl_md") };
+  } else {
+    rate = eng("vc_rate_gas");
+    if (!(rate > 0)) throw new Error("The test rate must be above 0.");
+    const gas = /** @type {vlp.GasFluid} */ (c.fluid);
+    const cgr = num("vc_cgr");
+    const gas_sg = cgr > 0 ? pvt.wetGasGravity(gas.gas_sg_dry, cgr, gas.cond_api) : gas.gas_sg_dry;
+    c.fluid = new vlp.GasFluid({ gas_sg, cgr, cond_api: gas.cond_api, wgr: num("vc_wgr"),
+                                 salinity: gas.salinity, y_h2s: gas.y_h2s, y_co2: gas.y_co2,
+                                 visc_method: gas.visc_method, gas_sg_dry: gas.gas_sg_dry });
+  }
+  // a multilayer well's mixture depends on the rate, so the fluid is taken at the test rate
+  const fluid = nodal.fluid_at_rate(c.fluid, c.ipr_name, c.p_res, c.ipr_inputs, rate);
+  return { c, fluid, rate };
+}
+
+/** @type {{depths: number[], measured: number[], rows: any[], best: string} | null} */
+let lastComparison = null;
+
+function compareToSurvey() {
+  const button = /** @type {HTMLButtonElement} */ (el("btn-compare"));
   button.disabled = true;
-  button.textContent = "Running every correlation...";
+  button.textContent = "Running the correlations...";
   setTimeout(() => {
     try {
       compareNow();
     } catch (error) {
-      message("corr-messages", /** @type {Error} */ (error).message, "error");
+      lastComparison = null;
+      clearChart("chart-survey");
+      const table = document.getElementById("corr-table");
+      if (table) table.innerHTML = "";
+      message("corr-messages", `Cannot compare: ${/** @type {Error} */ (error).message}`, "error");
     } finally {
       button.disabled = false;
-      button.textContent = "Compare all correlations";
+      button.textContent = "Compare with the measured data";
     }
   }, 10);
 }
 
 function compareNow() {
-  const c = buildCase();
-  const rateLabel = units.unitOf(c.rateUnit);
-  const pressureLabel = units.unitOf("pressure");
+  const keys = tickedCorrelations();
+  if (keys.length === 0) throw new Error("Tick at least one correlation.");
+  const { c, fluid, rate } = testCase();
+  const [depths, measured] = measuredPoints(c.perf_md);
+
+  /** @type {{key: string, label: string, ok: boolean, error: string, calc: number[],
+   *          bias: number, mae: number, rms: number, pct: number, md: number[], p: number[]}[]} */
   const rows = [];
-  for (const key of Object.keys(CORRELATION_NAMES)) {
+  const runs = keys.map((k) => ({ key: k, label: nameOf(k),
+                                  g: 1.0, f: 1.0 }));
+  // if multipliers are in use, the matched correlation is shown as well, so the match can be judged
+  const gNow = num("gravity_mult");
+  const fNow = num("friction_mult");
+  if (gNow !== 1.0 || fNow !== 1.0) {
+    runs.push({ key: c.correlation,
+                label: `${nameOf(c.correlation)} matched `
+                       + `(gravity x${gNow.toFixed(2)}, friction x${fNow.toFixed(2)})`,
+                g: gNow, f: fNow });
+  }
+
+  for (const run of runs) {
     try {
-      const res = nodal.solve_well(c.well, c.fluid, c.ipr_name, c.p_res, c.ipr_inputs, c.p_wh,
-                                   key, c.max_step_ft, 20, c.gravity_mult, c.friction_mult);
-      let patterns = "";
-      if (res.found) {
-        const f = nodal.fluid_at_rate(c.fluid, c.ipr_name, c.p_res, c.ipr_inputs,
-                                      /** @type {number} */ (res.q));
-        const tr = vlp.pressure_traverse(c.well, f, /** @type {number} */ (res.q), c.p_wh, key,
-                                         c.max_step_ft, c.gravity_mult, c.friction_mult);
-        patterns = patternShares(tr.regime, tr.md);
-      }
-      rows.push({ key, found: res.found, q: res.q, pwf: res.pwf, patterns, error: "" });
+      const tr = vlp.pressure_traverse(c.well, fluid, rate, c.p_wh, run.key, c.max_step_ft,
+                                       run.g, run.f);
+      const calc = depths.map((d) => interpAt(d, tr.md, tr.p));
+      const err = calc.map((p, i) => p - measured[i]);
+      rows.push({ key: run.key, label: run.label, ok: true, error: "", calc,
+                  bias: err.reduce((a, b) => a + b, 0) / err.length,
+                  mae: err.reduce((a, b) => a + Math.abs(b), 0) / err.length,
+                  rms: Math.sqrt(err.reduce((a, b) => a + b * b, 0) / err.length),
+                  pct: 100.0 * err.reduce((a, b, i) => a + Math.abs(b / measured[i]), 0) / err.length,
+                  md: tr.md, p: tr.p });
     } catch (error) {
-      rows.push({ key, found: false, q: null, pwf: null, patterns: "",
-                  error: /** @type {Error} */ (error).message });
+      rows.push({ key: run.key, label: run.label, ok: false,
+                  error: /** @type {Error} */ (error).message, calc: [], bias: NaN, mae: NaN,
+                  rms: NaN, pct: NaN, md: [], p: [] });
     }
   }
-  const table = document.getElementById("corr-table");
-  if (table) {
-    table.innerHTML = `<tr><th>Correlation</th><th>Rate (${rateLabel})</th>`
-      + `<th>Pwf (${pressureLabel})</th><th>Flow patterns</th><th>Notes</th></tr>`
-      + rows.map((r) => {
-        const best = r.key === c.correlation ? ' class="best"' : "";
-        return `<tr${best}><td>${CORRELATION_NAMES[/** @type {keyof typeof CORRELATION_NAMES} */ (r.key)]}`
-          + `${best ? " (in use)" : ""}</td>`
-          + `<td>${r.found ? show(units.fromEngine(c.rateUnit, /** @type {number} */ (r.q)), 0) : "no flow"}</td>`
-          + `<td>${r.found ? show(units.fromEngine("pressure", /** @type {number} */ (r.pwf)), 0) : ""}</td>`
-          + `<td style="text-align:left">${r.patterns}</td>`
-          + `<td style="text-align:left">${r.error}</td></tr>`;
-      }).join("");
-  }
-  message("corr-messages", "The spread between these is the honest uncertainty of the tubing "
-    + "calculation for this well. Only a measured flowing pressure can narrow it.", "");
+
+  // the closest one, ignoring the no-slip quality-check bound and the already-matched run
+  const ranked = rows.filter((r) => r.ok && !advice.QC_ONLY.includes(r.key)
+                                    && !r.label.includes("matched"));
+  const best = ranked.length
+    ? ranked.reduce((a, b) => (b.rms < a.rms ? b : a)).label
+    : "";
+  lastComparison = { depths, measured, rows, best };
+  drawSurveyChart(depths, measured, rows, c);
+  drawSurveyTable(rows, measured, depths, best, c);
 }
 
+/** @param {number[]} depths @param {number[]} measured @param {any[]} rows @param {Case} c */
+function drawSurveyChart(depths, measured, rows, c) {
+  const pressureLabel = units.unitOf("pressure");
+  const lengthLabel = units.unitOf("length");
+  const colours = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b",
+                   "#7f7f7f"];
+  /** @type {any[]} */
+  const traces = [];
+  rows.filter((r) => r.ok).forEach((r, i) => {
+    traces.push({ x: r.p.map((/** @type {number} */ p) => units.fromEngine("pressure", p)),
+                  y: r.md.map((/** @type {number} */ d) => units.fromEngine("length", d)),
+                  mode: "lines", name: r.label,
+                  line: { color: colours[i % colours.length], width: 2,
+                          dash: r.label.includes("matched") ? "dash" : "solid" } });
+  });
+  traces.push({ x: measured.map((p) => units.fromEngine("pressure", p)),
+                y: depths.map((d) => units.fromEngine("length", d)),
+                mode: "markers", name: "Measured",
+                marker: { color: "#111", size: 11, symbol: "diamond" } });
+  plot("chart-survey", traces, {
+    ...layoutFor(`Pressure (${pressureLabel})`, `Measured depth (${lengthLabel})`),
+    yaxis: { title: { text: `Measured depth (${lengthLabel})` }, autorange: "reversed",
+             gridcolor: "#eef2f5", zeroline: false },
+    margin: { l: 70, r: 16, t: 42, b: 48 },
+  });
+}
+
+/** @param {any[]} rows @param {number[]} measured @param {number[]} depths @param {string} best @param {Case} c */
+function drawSurveyTable(rows, measured, depths, best, c) {
+  const table = document.getElementById("corr-table");
+  const u = units.unitOf("pressureDiff");
+  if (table) {
+    table.innerHTML = `<tr><th>Correlation</th><th>Mean error (${u})</th>`
+      + `<th>Mean absolute (${u})</th><th>RMS (${u})</th><th>Mean absolute (%)</th></tr>`
+      + rows.map((r) => {
+        if (!r.ok) {
+          return `<tr><td>${r.label}</td><td colspan="4" style="text-align:left">${r.error}</td></tr>`;
+        }
+        const mark = r.label === best ? ' class="best"' : "";
+        const d = (/** @type {number} */ v) => show(units.fromEngine("pressureDiff", v), 0);
+        const sign = r.bias >= 0 ? "+" : "-";
+        return `<tr${mark}><td>${r.label}${r.label === best ? " &larr; closest" : ""}</td>`
+          + `<td>${sign}${d(Math.abs(r.bias))}</td><td>${d(r.mae)}</td><td>${d(r.rms)}</td>`
+          + `<td>${r.pct.toFixed(1)}</td></tr>`;
+      }).join("");
+  }
+  const note = document.getElementById("corr-note");
+  const notes = ["Error = calculated minus measured pressure, over the measured points. A positive "
+                 + "mean error means the correlation over-predicts the pressure drop."];
+  if (best) {
+    const row = rows.find((r) => r.label === best);
+    notes.push(`Closest to the measured data: ${best} (RMS error `
+      + `${show(units.fromEngine("pressureDiff", row.rms), 0)} ${u}, `
+      + `${row.pct.toFixed(1)} % mean absolute error). Choose it on the left if you want to keep it.`);
+  }
+  // the no-slip bound should be the lowest pressure there is; below it, the data or the PVT is wrong
+  const fb = rows.find((r) => r.ok && r.key === "fancher_brown");
+  if (fb && c.fluid_type === "oil") {
+    const deepest = depths.indexOf(Math.max(...depths));
+    if (measured[deepest] < fb.calc[deepest]) {
+      notes.push("The deepest measured pressure is BELOW the Fancher and Brown (no slip) "
+        + "calculation, which should be the lowest possible. Check the fluid density (PVT), the "
+        + "rate and the pressure data before trusting any match.");
+    }
+  }
+  if (note) note.textContent = notes.join(" ");
+  message("corr-messages", "");
+}
+
+/** Match the chosen correlation to the measured data. */
 function runMatch() {
   const button = /** @type {HTMLButtonElement} */ (el("btn-match"));
   button.disabled = true;
   setTimeout(() => {
     try {
-      const c = buildCase();
-      const m = nodal.match_vlp_multiplier(c.well, c.fluid, eng("match_q"), c.p_wh, eng("match_pwf"),
+      const { c, fluid, rate } = testCase();
+      const [depths, measured] = measuredPoints(c.perf_md);
+      const found = nodal.match_vlp_survey(c.well, fluid, rate, c.p_wh, depths, measured,
                                            c.correlation, c.max_step_ft, pick("match_fit"),
-                                           0.5, 2.0, units.ATM_PSI, units.unitOf("pressure"));
-      const which = pick("match_fit") === "friction" ? "friction_mult" : "gravity_mult";
-      const other = which === "friction_mult" ? "gravity_mult" : "friction_mult";
-      /** @type {HTMLInputElement} */ (el(which)).value = m.toFixed(3);
-      /** @type {HTMLInputElement} */ (el(other)).value = "1";
-      noteTyped(which);
-      noteTyped(other);
-      message("match-messages", `The ${pick("match_fit")} multiplier that reproduces that test is `
-        + `<b>${m.toFixed(3)}</b>. It is now in the boxes below and is used everywhere in the app; `
-        + "press Calculate to see the operating point with it.", "");
+                                           vlp.MULTIPLIER_MIN, 2.0);
+      const g = Number(found.gravity.toFixed(2));
+      const f = Number(found.friction.toFixed(2));
+      /** @type {HTMLInputElement} */ (el("gravity_mult")).value = String(g);
+      /** @type {HTMLInputElement} */ (el("friction_mult")).value = String(f);
+      noteTyped("gravity_mult");
+      noteTyped("friction_mult");
+      const u = units.unitOf("pressureDiff");
+      const name = nameOf(c.correlation);
+      let text = `<b>${name}</b> matched: gravity x${g.toFixed(2)}, friction x${f.toFixed(2)}. `
+        + `The root-mean-square error over the measured points went from `
+        + `${show(units.fromEngine("pressureDiff", found.rms_before), 0)} to `
+        + `${show(units.fromEngine("pressureDiff", found.rms_after), 0)} ${u}. `
+        + "The multipliers are in the boxes below and are used everywhere in the app; press "
+        + "Calculate for the operating point with them.";
+      if (found.at_limit.length) {
+        text += ` The ${found.at_limit.join(" and ")} multiplier ran to the end of its range, so `
+          + "this match is not reliable: something other than the correlation is probably wrong.";
+      }
+      message("match-messages", text, found.at_limit.length ? "warn" : "");
     } catch (error) {
-      message("match-messages", /** @type {Error} */ (error).message, "error");
+      message("match-messages", `Cannot match: ${/** @type {Error} */ (error).message}`, "error");
     } finally {
       button.disabled = false;
     }
@@ -1114,8 +1433,13 @@ writeUnitLabels();
 for (const id of ALL_IDS) {
   const node = document.getElementById(id);
   if (!node) continue;
-  for (const event of ["input", "change"]) {
-    node.addEventListener(event, () => { noteTyped(id); recalculate(); });
+  // The correlation box has its own listener further down, because it must record that the user
+  // chose by hand BEFORE anything recalculates.  Wired here as well, it would recalculate first and
+  // put the app's own suggestion straight back, so a correlation could not be chosen at all.
+  if (id !== "correlation") {
+    for (const event of ["input", "change"]) {
+      node.addEventListener(event, () => { noteTyped(id); recalculate(); });
+    }
   }
   noteTyped(id);               // the numbers the page opens with count as typed
 }
@@ -1128,8 +1452,23 @@ el("unit_system").addEventListener("change", (event) => {
 });
 el("btn-calc").addEventListener("click", calculate);
 el("btn-sens").addEventListener("click", runSensitivity);
-el("btn-corr").addEventListener("click", compareCorrelations);
+el("btn-compare").addEventListener("click", compareToSurvey);
 el("btn-match").addEventListener("click", runMatch);
+el("correlation").addEventListener("change", () => {
+  correlationPickedByHand = true;       // the user has chosen; stop moving the box for them
+  noteTyped("correlation");
+  recalculate();
+});
+el("btn-follow").addEventListener("click", () => {
+  correlationPickedByHand = false;
+  updateCorrelationAdvice();
+  recalculate();
+});
+el("fluid_type").addEventListener("change", () => {
+  fillCorrelationChoices();
+  fillCorrelationTicks();
+  updateCorrelationAdvice();
+});
 el("btn-reset-mult").addEventListener("click", () => {
   /** @type {HTMLInputElement} */ (el("gravity_mult")).value = "1";
   /** @type {HTMLInputElement} */ (el("friction_mult")).value = "1";
@@ -1143,4 +1482,6 @@ el("file-open").addEventListener("change", openCase);
 for (const [tab] of TABS) el(tab).addEventListener("click", () => showTab(tab));
 
 fillSensitivityChoices();
+fillCorrelationChoices();
+fillCorrelationTicks();
 recalculate();

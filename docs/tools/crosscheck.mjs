@@ -16,6 +16,7 @@ import * as ipr from "../ipr.js";
 import * as vlp from "../vlp.js";
 import * as wellmod from "../well.js";
 import * as nodal from "../nodal.js";
+import * as advice from "../advice.js";
 
 // ---------------------------------------------------------------------
 // The traverse takes a well and a fluid object, which the Python side wrote out as plain
@@ -130,6 +131,14 @@ const MAP = {
   curves: (w, f, ...rest) => nodal.curves(build(w), build(f), ...rest),
   match_vlp_multiplier: (w, f, ...rest) => nodal.match_vlp_multiplier(build(w), build(f), ...rest),
   match_vlp_survey: (w, f, ...rest) => nodal.match_vlp_survey(build(w), build(f), ...rest),
+  // ---- advice.js: the only part of the cross-check that compares WORDS ----
+  max_inclination_deg: advice.max_inclination_deg,
+  correlation_advice: advice.correlation_advice,
+  recommend_correlation: (i) => {
+    const [key, notes] = advice.recommend_correlation(i);
+    return { key, notes };
+  },
+  correlation_caption: advice.correlation_caption,
   find_operating_point_demo: findOperatingPointDemo,
   fluid_at_rate_demo: fluidAtRateDemo,
   sensitivity_demo: sensitivityDemo,
@@ -186,6 +195,9 @@ const NEAR_ZERO_LIMIT = 1e-6;
 /** Relative difference, falling back to the absolute one for numbers near zero. */
 function diff(got, want) {
   if (want === null || got === null) return want === got ? 0 : Infinity;
+  // words, and anything else that is not a number, must match exactly: advice.js and app_helpers.py
+  // have to say the same sentence about the same well
+  if (typeof want === "string" || typeof got === "string") return got === want ? 0 : Infinity;
   if (!Number.isFinite(got) || !Number.isFinite(want)) return got === want ? 0 : Infinity;
   const scale = Math.max(Math.abs(want), 1e-9);
   return Math.abs(got - want) / scale;
@@ -218,7 +230,8 @@ const TOLERANCE = 1e-9;          // ten decimal places: the two should differ on
 
 function main() {
   const files = ["tools/pvt_expected.json", "tools/ipr_expected.json",
-                 "tools/vlp_expected.json", "tools/nodal_expected.json"].filter(existsSync);
+                 "tools/vlp_expected.json", "tools/nodal_expected.json",
+                 "tools/advice_expected.json"].filter(existsSync);
   if (files.length === 0) {
     console.error("No expected-answer file found. Run first:\n  PYTHONPATH=.. python3 tools/dump_pvt.py tools/pvt_expected.json\n  PYTHONPATH=.. python3 tools/dump_ipr.py tools/ipr_expected.json\n  PYTHONPATH=.. python3 tools/dump_vlp.py tools/vlp_expected.json\n  python3 tools/dump_nodal.py tools/nodal_expected.json");
     process.exit(2);

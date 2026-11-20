@@ -92,6 +92,14 @@
   .panel details.group[open] > summary::before { content: "\25BE"; }
   .panel details.group > div { padding-top: 12px; }
   .hint { font-size: 12px; color: var(--ink-soft); margin: -4px 0 10px; }
+  .advice {
+    font-size: 12px; line-height: 1.45; margin: 6px 0 8px; padding: 8px 10px;
+    border-left: 3px solid var(--ink-soft); background: #fff; border-radius: 3px;
+  }
+  .advice.good { border-left-color: #1a7f37; }
+  .advice.ok { border-left-color: var(--accent); }
+  .advice.caution { border-left-color: var(--warn-line); background: var(--warn-bg); }
+  .advice b { font-weight: 650; color: var(--ink); }
 
   /* the tabs */
   .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
@@ -131,6 +139,9 @@
   table.data td:first-child, table.data th:first-child { text-align: left; }
   table.data tr.best td { font-weight: 650; }
 
+  .ticks { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+  .ticks label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
+  .ticks input { width: auto; margin: 0; }
   details.more { margin-top: 14px; font-size: 13px; color: var(--ink-soft); }
   details.more summary { cursor: pointer; }
   footer { border-top: 1px solid var(--line); padding: 14px 20px; font-size: 12px; color: var(--ink-soft); }
@@ -505,17 +516,14 @@
     <fieldset style="margin-top:14px">
       <legend>VLP correlation</legend>
       <label>
-        <select id="correlation">
-          <option value="beggs_brill">Beggs and Brill (1973)</option>
-          <option value="hagedorn_brown">Hagedorn and Brown (1965)</option>
-          <option value="gray">Gray (1974)</option>
-          <option value="orkiszewski">Orkiszewski (1967)</option>
-          <option value="ansari">Ansari and others (1994)</option>
-          <option value="duns_ros">Duns and Ros (1963)</option>
-          <option value="mukherjee_brill">Mukherjee and Brill (1985)</option>
-          <option value="fancher_brown">Fancher and Brown (1963) - no slip</option>
-        </select>
+        <select id="correlation"></select>
       </label>
+      <p class="advice" id="corr-why"></p>
+      <button type="button" id="btn-follow" class="hidden"></button>
+      <details class="more" id="corr-detail-box">
+        <summary>More about this correlation</summary>
+        <p id="corr-detail"></p>
+      </details>
     </fieldset>
 
     <button type="button" id="btn-calc" class="primary">Calculate</button>
@@ -525,7 +533,7 @@
     <div class="tabs" role="tablist">
       <button type="button" role="tab" id="tab-nodal" aria-selected="true">IPR / VLP and P-T profiles</button>
       <button type="button" role="tab" id="tab-sens" aria-selected="false">Sensitivity</button>
-      <button type="button" role="tab" id="tab-corr" aria-selected="false">VLP comparison</button>
+      <button type="button" role="tab" id="tab-corr" aria-selected="false">VLP comparison and matching</button>
     </div>
 
     <!-- ---------- the operating point ---------- -->
@@ -574,32 +582,111 @@
       <table class="data" id="sens-table"></table>
     </section>
 
-    <!-- ---------- correlation comparison and matching ---------- -->
+    <!-- ---------- VLP comparison and matching ---------- -->
     <section class="tabpage" id="page-corr">
-      <p class="caption">No correlation fits every well; only a measured flowing pressure can say which
-        one is right. This runs the well with every correlation and shows what each one gives and the
-        flow patterns it finds.</p>
-      <button type="button" id="btn-corr" class="primary">Compare all correlations</button>
+      <p class="caption">Enter the conditions of a flowing survey and the measured pressures &mdash; a
+        downhole gauge (PDG) reading or a flowing pressure gradient survey, up to
+        <b id="max-points">10</b> points. The app runs the tubing calculation with each correlation
+        you tick and shows how close each one comes. Depths are measured depth; every pressure is
+        gauge. It uses the fluid, well and inflow entered on the left.</p>
+
+      <div class="charts">
+        <div>
+          <h2 class="sub">Test conditions</h2>
+          <label>Wellhead flowing pressure <span class="u" data-unit="pressure"></span>
+            <input type="number" id="vc_p_wh" value="200" step="10" min="0">
+          </label>
+          <div id="vc-oil">
+            <div class="row">
+              <label>Rate type
+                <select id="vc_rate_type">
+                  <option value="liquid">Liquid rate</option>
+                  <option value="oil">Oil rate</option>
+                </select>
+              </label>
+              <label>Rate <span class="u" data-unit="liquidRate"></span>
+                <input type="number" id="vc_rate" value="2000" step="100" min="0.001">
+              </label>
+            </div>
+            <div class="row">
+              <label>Water cut <span class="u">%</span>
+                <input type="number" id="vc_wc" value="30" step="5" min="0" max="99">
+              </label>
+              <label>GOR <span class="u" data-unit="gor"></span> of oil
+                <input type="number" id="vc_gor" value="500" step="50" min="0">
+              </label>
+            </div>
+          </div>
+          <div id="vc-gas">
+            <label>Gas rate <span class="u" data-unit="gasRate"></span>
+              <input type="number" id="vc_rate_gas" value="5000" step="100" min="0.001">
+            </label>
+            <div class="row">
+              <label>Condensate-gas ratio <span class="u">STB/MMscf</span>
+                <input type="number" id="vc_cgr" value="0" step="5" min="0" max="1000">
+              </label>
+              <label>Water-gas ratio <span class="u">STB/MMscf</span>
+                <input type="number" id="vc_wgr" value="0" step="1" min="0" max="1000">
+              </label>
+            </div>
+          </div>
+          <div class="row">
+            <label>Gas lift gas rate <span class="u" data-unit="gasRate"></span>
+              <input type="number" id="vc_gl_rate" value="1000" step="100" min="0">
+            </label>
+            <label>Depth of injection <span class="u" data-unit="length"></span>
+              <input type="number" id="vc_gl_md" value="6000" step="100" min="100">
+            </label>
+          </div>
+          <p class="hint" id="vc-gl-note"></p>
+        </div>
+
+        <div>
+          <h2 class="sub">Measured data</h2>
+          <p class="hint">Depth and pressure, one pair per line, separated by a space, tab, comma or
+            semicolon. Paste two columns straight from a spreadsheet. A single downhole gauge reading
+            is one line.</p>
+          <label>
+            <textarea id="vc_points" rows="8" placeholder="4000 1200&#10;8000 2400"></textarea>
+          </label>
+          <h2 class="sub">Correlations to compare</h2>
+          <div id="vc-corrs" class="ticks"></div>
+        </div>
+      </div>
+
+      <button type="button" id="btn-compare" class="primary">Compare with the measured data</button>
       <div id="corr-messages"></div>
-      <table class="data" id="corr-table"></table>
+
+      <div class="charts">
+        <div>
+          <h2 class="sub">Measured against calculated</h2>
+          <div class="chart" id="chart-survey"></div>
+        </div>
+        <div>
+          <h2 class="sub">How close each one comes</h2>
+          <table class="data" id="corr-table"></table>
+          <p class="caption" id="corr-note"></p>
+        </div>
+      </div>
 
       <details class="more" open>
-        <summary>Match from one measured test (one rate, one bottom-hole pressure)</summary>
+        <summary>Match the chosen correlation to this measured data</summary>
+        <p class="hint">Matching bends the correlation until it reproduces the measurement, by
+          multiplying its gravity and friction parts. It is worth doing when one correlation is
+          already close; stretching a correlation that is far out usually means something else is
+          wrong (the PVT, the rate, the water cut, the depths).</p>
         <div class="row">
-          <label>Test rate <span class="u" id="match_q_unit"></span>
-            <input type="number" id="match_q" value="2000" step="100" min="0.001">
-          </label>
-          <label>Measured Pwf <span class="u" data-unit="pressure"></span>
-            <input type="number" id="match_pwf" value="2500" step="50" min="1">
-          </label>
           <label>Fit
             <select id="match_fit">
-              <option value="friction">Friction multiplier</option>
-              <option value="gravity">Gravity multiplier</option>
+              <option value="both">Both multipliers (needs 2 or more depths)</option>
+              <option value="friction">Friction multiplier only</option>
+              <option value="gravity">Gravity multiplier only</option>
             </select>
           </label>
+          <label>&nbsp;
+            <button type="button" id="btn-match">Match the chosen correlation</button>
+          </label>
         </div>
-        <button type="button" id="btn-match">Find the multiplier</button>
         <div id="match-messages"></div>
       </details>
 
@@ -614,10 +701,11 @@
           </label>
         </div>
         <button type="button" id="btn-reset-mult">Reset both to 1.00</button>
-        <p class="hint">These multiply the gravity and friction parts of the pressure drop everywhere in
-          the app, so the operating point on the first tab uses them too.</p>
+        <p class="hint">These multiply the gravity and friction parts of the pressure drop everywhere
+          in the app, so the operating point on the first tab uses them too.</p>
       </fieldset>
     </section>
+
   </main>
 </div>
 

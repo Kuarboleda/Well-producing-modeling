@@ -13,11 +13,24 @@ page produces is checked against it (see below).
 
 **What the page does now:** the inflow (IPR) for every model, the tubing (VLP) with all eight
 correlations, the operating point where they cross, the pressure and temperature profile down the
-well, continuous gas lift, sensitivities on one input at a time, a comparison of all eight
-correlations side by side, and VLP matching from a measured flowing pressure - in oilfield or metric
-units. Still to come: the gas lift valve design, the ESP design, PVT matching to laboratory data,
-horizontal-well and multilayer inflow on the screen (the engine behind them is already translated),
-and the survey table as a table rather than pasted text.
+well, continuous gas lift, sensitivities on one input at a time, the correlation chosen for the well
+from its own inputs with the reason given, the correlations compared against a measured downhole
+gauge reading or flowing gradient survey, and matching the chosen one to that data - in oilfield or
+metric units. Still to come: the gas lift valve design, the ESP design, PVT matching to laboratory
+data, horizontal-well and multilayer inflow on the screen (the engine behind them is already
+translated), and the survey table as a table rather than pasted text.
+
+## Choosing the correlation
+
+The correlation box starts on the one the app suggests for the well that has been entered - the
+fluid, the water cut or condensate ratio, the oil gravity and the well path - and follows that
+suggestion as those inputs change, until a correlation is chosen by hand. Underneath it, the page
+names the correlation, says whether it looks well suited, usable, or doubtful for this well, and
+gives the reason from the correlation's own paper.
+
+Every one of those notes ends the same way, on purpose: **this only uses the fluid, the equipment and
+the well path.** No set of rules can say which correlation is right for a well. Only a measured
+flowing pressure can, which is what the *VLP comparison and matching* tab is for.
 
 ## What is here so far
 
@@ -30,12 +43,14 @@ and the survey table as a table rather than pasted text.
 | `vlp.js` | translation of `vlp.py`: the fluids, the pressure traverse and all eight gradient correlations - friction factor, surface tension, Beggs and Brill, Hagedorn and Brown, Gray, Orkiszewski, Duns and Ros, Ansari, Mukherjee and Brill, Fancher and Brown |
 | `well.js` | translation of `well.py`: the survey, cutting the well into steps, the temperature profile |
 | `nodal.js` | translation of `nodal.py`: the operating point, VLP matching, sensitivities |
+| `advice.js` | translation of the advice part of `app_helpers.py`: which correlation suits this well, and why |
 | `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
 | `tools/dump_pvt.py`, `tools/dump_ipr.py` | run the PYTHON engine over thousands of cases and save the answers |
 | `tools/dump_nodal.py` | the same for the nodal analysis: operating points, matching, sensitivities |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |
 | `tools/test_units.mjs` | checks the unit conversions on their own, including a round trip through both systems |
-| `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey and a bad input (78 checks) |
+| `tools/dump_advice.py` | the same for the correlation advice - the only part that compares WORDS |
+| `tools/test_page.mjs` | drives the real page in a real browser: every tab, every button, both unit systems, oil and gas, gas lift, a deviated survey, the correlation advice, the comparison with measured data and a bad input (110 checks) |
 
 `vlp.py` is 2,000 lines and eight correlations, so it is being translated in stages, each one
 cross-checked before the next begins:
@@ -61,13 +76,18 @@ PYTHONPATH=.. python3 tools/dump_pvt.py tools/pvt_expected.json
 PYTHONPATH=.. python3 tools/dump_ipr.py tools/ipr_expected.json
 PYTHONPATH=.. python3 tools/dump_vlp.py tools/vlp_expected.json
 python3 tools/dump_nodal.py tools/nodal_expected.json
+python3 tools/dump_advice.py tools/advice_expected.json
 node tools/crosscheck.mjs
 ```
 
 Every function keeps the same name and the same argument order on both sides, so the comparison needs
 no knowledge of the physics. The tolerance is 1e-9 (about ten decimal places).
 
-As of 20 Nov 2026: **36,628 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
+`advice.js` is the exception: its answers are **sentences**, so those 1,324 cases are compared word
+for word. If a sentence is reworded on one side only, the cross-check fails - which is the point,
+because the browser version and the Streamlit version must say the same thing about the same well.
+
+As of 20 Nov 2026: **37,952 cases, 0 failures, largest disagreement 6.56e-13** - which is nothing but
 floating-point rounding. Most IPR functions agree exactly, to the last bit.
 
 This is not a formality. Within the first ten minutes it found a real bug in the Python: `pb_petrosky`
