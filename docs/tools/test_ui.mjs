@@ -257,13 +257,20 @@ check("the two zeros at the origin are separated", nod.layout.xaxis.range[0] < 0
 
 // ---- the live well beside the charts ----
 check("the well is drawn", (await flowSvg()).includes("<path") && (await flowSvg()).includes("Perforations"));
-const svgText = () => page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent));
-const parts = await svgText();
-for (const want of ["Swab valve", "Production wing", "Upper master", "Lower master",
-                    "Annulus seal", "Production casing", "Annulus", "Production tubing",
-                    "Production packer", "Tubing tailpipe", "Perforations", "Casing shoe"]) {
-  check(`the well labels the ${want.toLowerCase()}`, parts.includes(want), parts.join(" | "));
+// The component names are hover tooltips, not a column of labels down the side: the drawing is
+// the thing being looked at and the leader lines were crowding it out.
+const tips = () => page.$$eval("#flow-svg title", (ns) => ns.map((n) => n.textContent));
+const parts = await tips();
+for (const want of ["Swab valve", "Production wing valve", "Upper master valve",
+                    "Lower master valve", "Wellhead annulus seal", "Production casing",
+                    "Production tubing", "Production packer", "Open tubing tailpipe",
+                    "Perforations", "Casing shoe", "Reservoir"]) {
+  check(`hovering names the ${want.toLowerCase()}`,
+        parts.some((s) => s.startsWith(want)), parts.join(" | "));
 }
+check("the only text on the drawing is the depth scale and the lift gas inlet",
+      (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
+        .every((s) => s.startsWith("lift gas in")));
 check("the fluid is drawn as particles",
       (await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.length)) > 20);
 check("fluid enters through the perforations",
@@ -281,7 +288,7 @@ const depths = await page.evaluate(() => {
   const labels = [...svg.querySelectorAll("text.wv-lbl")];
   const dot = (t) => { const i = labels.findIndex((n) => n.textContent === t);
     return i < 0 ? NaN : labels[i].getBoundingClientRect().top; };
-  const perfMarks = [...svg.querySelectorAll("path")].filter((n) => n.getAttribute("stroke") === "#8c3b2e");
+  const perfMarks = [...svg.querySelectorAll("path")].filter((n) => n.getAttribute("stroke") === "#7c3f1d");
   const packers = [...svg.querySelectorAll(".wv-packer rect")];
   const shoe = svg.querySelector("#wv-bore").getBoundingClientRect().bottom;
   return {
@@ -289,14 +296,20 @@ const depths = await page.evaluate(() => {
     packer: Math.min(...packers.map((n) => n.getBoundingClientRect().top)),
     botPerf: Math.max(...perfMarks.map((n) => n.getBoundingClientRect().bottom)),
     shoe, nPerf: perfMarks.length, nPacker: packers.length,
+    casingBottom: Math.max(...[...svg.querySelectorAll(".wv-shoe")]
+      .map((n) => n.getBoundingClientRect().bottom)),
   };
 });
 check("the packer is drawn", depths.nPacker >= 2, `${depths.nPacker} parts`);
-check("the perforations are drawn", depths.nPerf >= 8, `${depths.nPerf} marks`);
+check("the perforations are drawn through both walls",
+      depths.nPerf >= 8 && depths.nPerf % 2 === 0, `${depths.nPerf} marks`);
+check("and they stop short of the casing shoe",
+      depths.botPerf < depths.casingBottom - 6,
+      `lowest at ${Math.round(depths.botPerf)}px, shoe at ${Math.round(depths.casingBottom)}px`);
 check("the packer sits ABOVE the top of the perforations", depths.packer < depths.topPerf - 4,
       `packer at ${Math.round(depths.packer)}px, top perforation at ${Math.round(depths.topPerf)}px`);
-check("and the tailpipe hangs on below it, into the perforated interval",
-      depths.shoe > depths.topPerf && depths.shoe <= depths.botPerf + 2,
+check("and the tailpipe ends at the top of the perforations",
+      Math.abs(depths.shoe - depths.topPerf) < 14,
       `tailpipe ends at ${Math.round(depths.shoe)}px, perforations `
         + `${Math.round(depths.topPerf)}-${Math.round(depths.botPerf)}px`);
 
@@ -307,9 +320,19 @@ await page.waitForTimeout(150);
 await page.selectOption("#lift", "continuous");
 await page.waitForTimeout(300);
 await calc();
-const liftParts = await svgText();
-check("the gas lift valve is drawn", liftParts.includes("Gas lift valve"), liftParts.join(" | "));
-check("the lift gas enters at the tubing head", liftParts.includes("lift gas in"));
+check("the side pocket mandrel is drawn",
+      (await page.$$eval("#wv-glvalve", (ns) => ns.length)) === 1);
+check("the lift gas inlet reads ON", (await tips()).some((s) => s.startsWith("Annulus wing valve"))
+      && (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
+        .includes("lift gas in: ON"));
+check("and the inlet sits above the 0 ft line, on the wellhead",
+      await page.evaluate(() => {
+        const svg = document.querySelector("#flow-svg");
+        const wing = svg.querySelector("#wv-annwing").getBoundingClientRect();
+        const zero = [...svg.querySelectorAll("text.wv-depth")]
+          .find((n) => n.textContent === "0").getBoundingClientRect();
+        return wing.bottom < zero.bottom;
+      }));
 // Where the parts sit ACROSS the well, in drawing units measured from its centre line.  A stroked
 // path reports no width of its own, so the widths come from the stroke and the centre from the bore.
 const across = await page.evaluate(() => {
@@ -317,20 +340,27 @@ const across = await page.evaluate(() => {
   const r = svg.getBoundingClientRect();
   const k = svg.viewBox.baseVal.width / r.width;
   const cx0 = (svg.querySelector("#wv-bore").getBoundingClientRect().left - r.left) * k;
-  const half = (sel) => Number(svg.querySelector(sel).getAttribute("stroke-width")) / 2;
   const n = (el, a) => Number(el.getAttribute(a));
+  // one bold line per string, so each is measured from where it is drawn
+  const halfOf = (sel) => {
+    const b = svg.querySelector(sel).getBoundingClientRect();
+    return Math.max(Math.abs((b.left - r.left) * k - cx0), Math.abs((b.right - r.left) * k - cx0));
+  };
   const band = (el) => {
     const mid = Math.abs(n(el, "x") + n(el, "width") / 2 - cx0);
     return [mid - n(el, "width") / 2, mid + n(el, "width") / 2];
   };
   const wide = (el) => {                       // a shape placed by a transform, not by x
     const b = el.getBoundingClientRect();
-    return { w: b.width * k, from: Math.abs((b.left - r.left) * k - cx0),
-             to: Math.abs((b.right - r.left) * k - cx0) };
+    // measured out from the centre line, so a part on the left reads the same as one on the right
+    const a = Math.abs((b.left - r.left) * k - cx0);
+    const c = Math.abs((b.right - r.left) * k - cx0);
+    return { w: b.width * k, from: Math.min(a, c), to: Math.max(a, c) };
   };
   return {
-    bore: half("#wv-bore"), tubing: half("#wv-tubing"), casing: half("#wv-annulus"),
-    valve: band(svg.querySelector("#wv-glvalve")),
+    bore: Number(svg.querySelector("#wv-bore").getAttribute("stroke-width")) / 2,
+    tubing: halfOf(".wv-tubing"), casing: halfOf(".wv-casing"),
+    valve: (() => { const v = wide(svg.querySelector("#wv-glvalve")); return [v.from, v.to]; })(),
     // the seals are groups now, so it is the block inside each one that gets measured
     packers: [...svg.querySelectorAll(".wv-packer rect")].map(band),
     wellhead: [...svg.querySelectorAll(".wv-wellhead-seal rect")].map(band),
@@ -343,8 +373,10 @@ const across = await page.evaluate(() => {
 check("the gas lift valve is flush against the tubing wall",
       Math.abs(across.valve[0] - across.tubing) < 0.6,
       `valve from ${across.valve[0].toFixed(1)}, tubing wall at ${across.tubing.toFixed(1)}`);
-check("and it still fits inside the casing", across.valve[1] <= across.casing + 0.6,
-      `valve to ${across.valve[1].toFixed(1)}, casing ID at ${across.casing.toFixed(1)}`);
+check("and the mandrel leaves the annulus open past it",
+      across.valve[1] < across.tubing + (across.casing - across.tubing) * 0.5,
+      `mandrel reaches ${across.valve[1].toFixed(1)} of ${across.casing.toFixed(1)}, `
+        + `tubing at ${across.tubing.toFixed(1)}`);
 check("the packer seals tubing to casing with no gap",
       across.packers.length === 2
         && across.packers.every(([a, b]) => Math.abs(a - across.tubing) < 0.6
@@ -382,13 +414,16 @@ const annulus = await page.evaluate(() => {
     const b = el.getBBox();
     return [b.y, b.y + b.height];
   };
-  const v = svg.querySelector("#wv-glvalve").getBBox();
+  // the mandrel is a transformed path, so its own bbox is in its own coordinates
+  const r = svg.getBoundingClientRect();
+  const k = svg.viewBox.baseVal.height / r.height;
+  const vb = svg.querySelector("#wv-glvalve").getBoundingClientRect();
   const pk = svg.querySelector(".wv-packer rect").getBBox();
   return { gas: ends("#wv-anngas"), dead: ends("#wv-anndead"),
-           packerY: pk.y + pk.height / 2, valveY: v.y + v.height / 2,
+           packerY: pk.y + pk.height / 2,
+           valveY: (vb.top + vb.height / 2 - r.top) * k,
            liftColour: svg.querySelector("#wv-anngas").getAttribute("stroke"),
-           jetColour: svg.querySelector("#wv-jet circle").getAttribute("fill"),
-           tubingGas: svg.querySelector(".wv-fill").getAttribute("stroke") };
+           jetColour: svg.querySelector("#wv-jet circle").getAttribute("fill") };
 });
 check("the lift gas column runs from surface down to the gas lift valve",
       Boolean(annulus.gas) && Math.abs(annulus.gas[1] - annulus.valveY) < 16,
@@ -440,7 +475,12 @@ const off = await page.evaluate(() => {
            dead: b ? [b.y, b.y + b.height] : null, packerY: pk.y + pk.height / 2 };
 });
 check("with gas lift off there is no gas anywhere in the annulus",
-      !off.gas && !off.valve && !off.wing, JSON.stringify(off));
+      !off.gas && !off.valve, JSON.stringify(off));
+// the inlet stays on the drawing either way, so the two states are one picture with one thing
+// changed rather than two different drawings
+check("but the inlet is still drawn, shut", off.wing
+      && (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
+        .includes("lift gas in: OFF"));
 check("and dead fluid stands the whole way down to the packer",
       Boolean(off.dead) && Math.abs(off.dead[1] - off.packerY) < 22, JSON.stringify(off));
 

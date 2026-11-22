@@ -43,27 +43,35 @@ measurable rather than a matter of taste, so it was measured:
   injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
   the perforations is obvious in a picture and invisible in a column of numbers.
 * Beside the pressure and temperature profile is **the well itself**, drawn from the inputs: the
-  Christmas tree - swab, two master valves and the production wing - the wellhead annulus seal, the
-  gas lift injection wing below it, the casing, the tubing, the production packer, the tailpipe, the
-  gas lift valve, the perforations and the casing shoe, with a depth scale and the fluid animated
-  through them.  Valves are the standard circle-and-cross symbol and seals are red crossed blocks.
+  Christmas tree - cap, swab, two master valves and the production wing - the wellhead annulus
+  seal standing above the ground line, the gas lift inlet below it, the casing, the tubing, the
+  packer, the tailpipe, the side pocket mandrel, the perforations and the casing shoe.
 
-  The packer is drawn **above** the top of the perforations, sealing tubing to casing with no gap,
-  and the tailpipe hangs on past it into the perforated interval, so formation fluid entering
-  through the perforations meets the open end of the tubing.
+  It is flat line art rather than a shaded picture: one bold black line for the casing and one for
+  the tubing, with the fluid filling right up to each.  A pair of lines for each string read as four
+  pipes instead of two.  The tree is drawn in grey because it is context, not the subject, and the
+  component names are hover tooltips rather than a column of labels down the side.  The tubing is
+  drawn at the size that was entered while the casing stays put, so a 4 1/2" string visibly fills
+  more of the annulus than a 2 7/8" one.
 
-  The annulus says what state the well is in.  With gas lift on it holds a gas column from surface
-  down to the gas lift valve and dead completion fluid below it, which is what an unloaded annulus
-  looks like, and gas jets through the valve into the tubing.  With gas lift off there is no gas in
-  it at all: the whole annulus is dead fluid and the well flows on its own.
+  The gas lift inlet is ALWAYS on the drawing, open and amber when injecting and greyed and shut
+  when not, so the two states are one picture with one thing changed rather than two different
+  drawings.  With gas lift on the annulus holds a gas column from the wellhead seal down to the
+  valve and dead completion fluid below it, which is what an unloaded annulus looks like, and gas
+  jets through the mandrel into the tubing.  With gas lift off the whole annulus is dead fluid.
 
-  Inside the tubing the flow regime is **drawn**, not tinted.  Bubble flow is a liquid column with
+  The packer sits above the perforations and the tailpipe ends at the top of them.  The swab valve
+  is shut, so nothing is ever drawn standing in the pipe above it, and everything the well makes
+  leaves through the production wing - the pocket above the tee is a dead leg, drawn filled but
+  still.
+
+  Inside the tubing the flow regime is DRAWN, not tinted.  Bubble flow is a liquid column with
   dispersed bubbles in it; slug flow is dome-topped Taylor bubbles spanning most of the bore with
   liquid slugs between them; churn is distorted gas pockets and frothy liquid bridges; annular is a
-  gas core inside a wavy liquid film on the wall, with entrained droplets.  Hovering anywhere on the
-  tubing says which regime it is and over what depths.  Oil is green, water blue and gas red - the
-  bright red is injected lift gas, the deep red is solution gas from the reservoir, and above the
-  valve, where the two have mixed, it is the red in between.
+  gas core inside a wavy liquid film on the wall, with entrained droplets.  Hovering anywhere on
+  the tubing says which regime it is and over what depths.  Which regimes appear is the
+  correlation's answer, not the drawing's choice.  Oil is green, water blue and gas red - bright
+  for injected lift gas, deep for solution gas below the valve, and the red in between above it.
 
   The depth scale is shared with the pressure and temperature profile beside it: both panels put
   TVD = 0 and the deepest point at the same two heights, so a depth read off one is at the same

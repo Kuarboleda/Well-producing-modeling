@@ -47,6 +47,15 @@ const fmt = (v, d = 0) => Number(v).toLocaleString("en-US",
 /** @param {number} a @param {number} lo @param {number} hi */
 const clamp = (a, lo, hi) => Math.min(Math.max(a, lo), hi);
 
+/** Blend two #rrggbb colours, k = 0 giving the first and k = 1 the second.
+ * @param {string} a @param {string} b @param {number} k */
+function mix(a, b, k) {
+  const part = (/** @type {string} */ c, /** @type {number} */ i) =>
+    parseInt(c.slice(1 + i * 2, 3 + i * 2), 16);
+  const out = [0, 1, 2].map((i) => Math.round(part(a, i) + (part(b, i) - part(a, i)) * k));
+  return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /**
  * @typedef {object} WellSpec
  * @property {number[]} md          survey measured depths, ft, starting at 0
@@ -123,7 +132,6 @@ export const FLOW_FAMILY_OF = {
 export function flowFamily(name) {
   return FLOW_FAMILY_OF[String(name || "").toLowerCase().trim()] || "";
 }
-
 /**
  * Build the drawing inside an <svg> element and return the handle the animation needs.
  * @param {SVGSVGElement} svg @param {WellSpec} spec
@@ -138,15 +146,7 @@ export function render(svg, spec) {
   const tree = Boolean(spec.tree);
   const perf_md = spec.md[spec.md.length - 1];
 
-  // ---- the tree, which has a fixed height whatever the well below it looks like ----
-  const SWAB_Y = 21;            // the swab valve, on top of the stem
-  const TEE_Y = 44;             // the tee, and the production wing arm out of it
-  const UPPER_MASTER_Y = 72;    // upper master valve
-  const LOWER_MASTER_Y = 98;    // lower master valve, just above the wellhead
-  const ARM_END = 92;           // how far the wing arm reaches out from the centre of the well
-
   // ---- the centre line of the well, in drawing coordinates ----
-  // the horizontal distance travelled, worked out from MD and TVD step by step
   const reach = [0];
   for (let i = 1; i < spec.md.length; i++) {
     const dmd = spec.md[i] - spec.md[i - 1];
@@ -160,38 +160,53 @@ export function render(svg, spec) {
   // pad.t pixels below the top of the panel and the deepest point pad.b above the bottom in BOTH,
   // so a depth read off one panel is at the same height on the other.  The page passes the two
   // paddings in, because they are the chart's own top and bottom margins.
-  const pad = { t: spec.padTop ?? (tree ? 132 : 34), b: spec.padBottom ?? 26,
-                l: compact ? 40 : 74, r: compact ? 14 : 152 };
-  const half = Math.min(13 + (spec.tubing_id - 2) * 2.2, 22);     // half the bore, in pixels
-  const bore = half * 2;
-  const wTubing = bore + 7;
-  const wAnnulus = bore + 34;
-  const wCasing = bore + 42;
-  const wCement = bore + 58;
+  const pad = { t: spec.padTop ?? (tree ? 200 : 34), b: spec.padBottom ?? 26,
+                l: compact ? 40 : 60, r: compact ? 14 : 20 };
 
-  const usableW = W - pad.l - pad.r - wCement;
+  const glOn = spec.gl_md !== null && spec.gl_md > 0 && spec.gl_md < spec.shoe_md;
+  const glMd = glOn ? Number(spec.gl_md) : 0;
+  const wingRoom = tree && !compact ? clamp(W * 0.17, 48, 86) : 20;
+
+  // How fat to draw the completion.  The casing is not an input, so it is a fixed width scaled to
+  // fill the panel; the TUBING is an input, so it scales with the size that was typed - a 4 1/2"
+  // string visibly fills more of the annulus than a 2 7/8" one, which is the point of drawing it.
+  const girth = compact ? 1
+    : clamp((W - pad.l - pad.r - 2 * wingRoom) / 114, 0.75, 1.9);
+  const rCasing = 57 * girth;
+  const half0 = Math.min(13 + (spec.tubing_id - 2) * 2.2, 22);
+  const rTubing = clamp(half0 * 1.383 * girth, 12 * girth, rCasing - 20 * girth);
+  const bore = rTubing * 2;
+
+  const usableW = W - pad.l - pad.r - 2 * rCasing;
   const usableH = H - pad.t - pad.b;
-  // The vertical scale is fixed by the shared depth scale, so the well always spans exactly the
-  // aligned height.  The horizontal one is squeezed to fit the room left over and never stretched
-  // past the vertical one, which keeps a deviated well looking deviated without pulling its depths
-  // out of line with the chart beside it.
   const scaleY = usableH / maxTvd;
   const scaleX = maxReach > 1 ? Math.min(usableW / maxReach, scaleY) : scaleY;
-  // centred in the room it has: a vertical well pinned to the left of the panel left a wide empty
-  // field of rock to the right of it
-  const x0 = pad.l + wCement / 2 + Math.max(usableW - maxReach * scaleX, 0) / 2;
+  // placed so the lift gas line has room on the left and the formation frames the well
+  const x0 = pad.l + wingRoom + rCasing;
   const X = (/** @type {number} */ r) => x0 + r * scaleX;
   const Y = (/** @type {number} */ d) => pad.t + d * scaleY;
   const ground = Y(0);
   const bx = X(0);
+  const axisX = Math.max(pad.l - 12, 28);
+
+  // ---- the tree, laid out in the room above ground that the shared depth scale gives it ----
+  // Everything is a fraction of that room, so the tree keeps its shape whatever height the page
+  // settles on, and the valve symbol is sized against the tubing but never big enough to collide.
+  const VR = tree ? Math.min(bore * 0.38, pad.t * 0.072) : 0;
+  const INLET_Y = ground - pad.t * 0.085;     // the lift gas in, just above 0 ft
+  const SEAL_Y = ground - pad.t * 0.19;       // the annulus seal, above it
+  const LM_Y = ground - pad.t * 0.31;         // lower master
+  const UM_Y = ground - pad.t * 0.46;         // upper master
+  const TEE_Y = ground - pad.t * 0.63;        // the tee, and the wing arm
+  const SWAB_Y = ground - pad.t * 0.80;       // the swab, shut: nothing stands above it
+  const CAP_Y = ground - pad.t * 0.93;
+  const armEnd = bx + Math.max(W * 0.22, rTubing + 60);
+
+  // The tubing carries on above the wellhead, up to the swab valve.  That length is given a
+  // NEGATIVE measured depth, so one set of helpers covers the whole string.
+  const topMd = tree ? (SWAB_Y - ground) / scaleY : 0;
 
   const points = spec.md.map((_, i) => [X(reach[i]), Y(spec.tvd[i])]);
-  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
-
-  // The tubing carries on above the wellhead, up the tree to the tee.  That length is given a
-  // NEGATIVE measured depth, so one set of helpers covers the whole string and the fluid can be
-  // drawn flowing up through the tree without a second way of finding where things are.
-  const topMd = tree ? (TEE_Y - ground) / scaleY : 0;
 
   /** A depth in MD, as a point on the drawing. @param {number} md */
   const at = (md) => {
@@ -213,11 +228,7 @@ export function render(svg, spec) {
     const len = Math.hypot(dx, dy) || 1;
     return [-dy / len, dx / len];
   };
-  /**
-   * How far the well leans at a depth, in degrees, so a shape drawn upright can be turned to sit
-   * along the pipe.  A shape's own "up" is -y, which is what a vertical well returns as zero.
-   * @param {number} md
-   */
+  /** How far the well leans at a depth, in degrees. A shape's own "up" is -y. @param {number} md */
   const tiltAt = (md) => {
     const a = at(clamp(md - step, topMd, perf_md));
     const b = at(clamp(md + step, topMd, perf_md));
@@ -232,92 +243,72 @@ export function render(svg, spec) {
     pts.push(at(to));
     return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
   };
-  const glOn = spec.gl_md !== null && spec.gl_md > 0 && spec.gl_md < spec.shoe_md;
-  const glMd = glOn ? Number(spec.gl_md) : 0;
-  // Which side of the well the lift gas is on.  The valve goes on the LEFT of the tubing, and the
-  // injection wing at surface has to be on that same left-hand side or the drawing would have the
-  // gas entering one side of the annulus and leaving the other.  Both are worked out from the line
-  // itself, because which way the normal points depends on which way the well is heading.
-  const liftSide = normalAt(glMd)[0] > 0 ? -1 : 1;
-  const wingDir = Math.sign(normalAt(0)[0] * liftSide) || -1;   // -1 when that is screen-left
+  // Which side the lift gas is on: the valve goes on the LEFT of the tubing and the injection wing
+  // at surface has to be on that same side, or the gas would enter one side and leave the other.
+  const liftSide = normalAt(glMd || perf_md * 0.5)[0] > 0 ? -1 : 1;
+  const wingDir = Math.sign(normalAt(0)[0] * liftSide) || -1;
 
   const defs = node("defs");
   svg.appendChild(defs);
-
-  // Gas shades by depth: deep crimson where it is all solution gas, blending just above the gas
-  // lift valve into the lighter red of the mixed stream.  One gradient serves every gas shape in
-  // the tubing, so a bubble is the right colour for the depth it happens to be at.
-  const gasGrad = node("linearGradient", { id: "wv-gas", gradientUnits: "userSpaceOnUse",
-                                           x1: bx, y1: at(topMd)[1], x2: bx, y2: at(perf_md)[1] });
-  if (glOn) {
-    const gy = at(glMd)[1];
-    const total = at(perf_md)[1] - at(topMd)[1];
-    const f = (gy - at(topMd)[1]) / Math.max(total, 1);
-    gasGrad.appendChild(node("stop", { offset: 0, "stop-color": PHASE_COLOURS.gas }));
-    gasGrad.appendChild(node("stop", { offset: Math.max(f - 0.12, 0).toFixed(3),
-                                       "stop-color": PHASE_COLOURS.gas }));
-    gasGrad.appendChild(node("stop", { offset: f.toFixed(3),
-                                       "stop-color": PHASE_COLOURS.solutionGas }));
-  } else {
-    gasGrad.appendChild(node("stop", { offset: 0, "stop-color": PHASE_COLOURS.solutionGas }));
-  }
-  gasGrad.appendChild(node("stop", { offset: 1, "stop-color": PHASE_COLOURS.solutionGas }));
-  defs.appendChild(gasGrad);
-  const GASFILL = "url(#wv-gas)";
-
-  // ---- the ground, and the reservoir ----
-  // Flat, pale bands rather than hatching and stippling: this is a conceptual completion diagram,
-  // and texture behind it only competes with the completion drawn on top.
-  const earthL = Math.max(pad.l - 18, 2);
-  const earthR = W - pad.r + 10;
-  svg.appendChild(node("rect", { x: earthL, y: ground, width: earthR - earthL,
-                                 height: H - ground - 6, fill: "#f6f1e7" }));
-  const payY = at(spec.perf_top)[1];
-  svg.appendChild(node("rect", { x: earthL, y: payY - 4, width: earthR - earthL,
-                                 height: H - 6 - (payY - 4), fill: "#e4d3ad" }));
-  svg.appendChild(node("line", { x1: earthL, y1: payY - 4, x2: earthR, y2: payY - 4,
-                                 stroke: "#c9b287", "stroke-width": 1 }));
-  svg.appendChild(node("line", { x1: earthL - 10, y1: ground, x2: earthR, y2: ground,
-                                 stroke: "#94a3b8", "stroke-width": 1.4 }));
-
-  // ---- the well itself, as concentric strokes of one line ----
+  /** Put a hover label on something: the component names live here, not in a label gutter.
+   * @param {any} el @param {string} text */
+  const tip = (el, text) => { el.appendChild(node("title", {}, text)); return el; };
   /** @param {string} d @param {number} width @param {string} colour @param {Record<string, string|number>} [extra] */
   const stroke = (d, width, colour, extra = {}) =>
     svg.appendChild(node("path", { d, fill: "none", stroke: colour, "stroke-width": width,
                                    "stroke-linecap": "butt", "stroke-linejoin": "round", ...extra }));
-  stroke(line, wCement, "#d8d2c4");                          // cement behind the casing
-  stroke(line, wCasing, STEEL);                              // the casing wall
-  stroke(line, wAnnulus, "#ffffff", { id: "wv-annulus" });   // the casing-tubing annulus
 
-  // ---- what is standing in the annulus ----
-  // With gas lift on the annulus is a pressurised gas column from surface down to the valve, and
-  // dead completion fluid below it: that is an unloaded annulus.  With gas lift off there is no gas
-  // in it at all and the whole thing is dead fluid.
-  if (glOn) {
-    stroke(segment(0, glMd), wAnnulus - 2, PHASE_COLOURS.liftGas,
-           { id: "wv-anngas", opacity: 0.72 });
-    stroke(segment(glMd, spec.packer_md), wAnnulus - 2, PHASE_COLOURS.water,
-           { id: "wv-anndead", opacity: 0.45 });
-  } else {
-    stroke(segment(0, spec.packer_md), wAnnulus - 2, PHASE_COLOURS.water,
-           { id: "wv-anndead", opacity: 0.45 });
+  /** The gas colour at a depth: crimson where it is all solution gas, lighter where the two have
+   * mixed above the valve.  A moving shape asks by depth, because a gradient in user space is read
+   * in the shape's own coordinates once it carries a transform. @param {number} md */
+  const gasAt = (md) => {
+    if (!glOn) return PHASE_COLOURS.solutionGas;
+    const yTop = at(topMd)[1];
+    const span = Math.max(at(perf_md)[1] - yTop, 1);
+    const k = clamp(((at(glMd)[1] - yTop) / span - (at(md)[1] - yTop) / span) / 0.12, 0, 1);
+    return mix(PHASE_COLOURS.solutionGas, PHASE_COLOURS.gas, k);
+  };
+
+  // ---- the reservoir, which is outside the casing ----
+  // Washed across the whole width it turned the fluid inside the casing olive, so it is drawn
+  // either side of the hole and not behind it.
+  const payTop = at(spec.perf_top)[1];
+  const payBot = at(perf_md)[1];
+  for (const s of [-1, 1]) {
+    tip(svg.appendChild(node("rect", { class: "wv-pay",
+      x: s < 0 ? bx - rCasing - 34 : bx + rCasing, y: payTop,
+      width: 34, height: Math.max(payBot - payTop, 3), fill: "#b98a5a", opacity: 0.4 })),
+      "Reservoir");
   }
 
-  // below the packer the casing is full of what the reservoir is giving, which is where the
-  // tailpipe has its open end
-  stroke(segment(spec.packer_md, perf_md), wAnnulus - 2, PHASE_COLOURS.oil,
-         { id: "wv-rathole", opacity: 0.3 });
+  // ---- what is standing in the annulus, and in the casing below the packer ----
+  const annTop = tree ? (SEAL_Y - ground) / scaleY : 0;
+  const annWidth = 2 * rCasing;      // laid down full width; the tubing fluid covers the middle
+  if (glOn) {
+    tip(stroke(segment(annTop, glMd), annWidth, PHASE_COLOURS.liftGas, { id: "wv-anngas" }),
+        "Lift gas: a pressurised column from surface down to the gas lift valve");
+    tip(stroke(segment(glMd, spec.packer_md), annWidth, PHASE_COLOURS.water,
+               { id: "wv-anndead", opacity: 0.55 }),
+        "Dead completion fluid, below the gas lift valve");
+  } else {
+    tip(stroke(segment(annTop, spec.packer_md), annWidth, PHASE_COLOURS.water,
+               { id: "wv-anndead", opacity: 0.55 }),
+        "Dead completion fluid: no gas is being injected");
+  }
+  tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, PHASE_COLOURS.oil,
+             { id: "wv-rathole", opacity: 0.22 }), "Reservoir fluid, below the packer");
 
+  // ---- the fluid in the tubing ----
+  // It stops at the swab valve, which is shut: nothing stands in the pipe above it.
   const toShoe = segment(topMd, spec.shoe_md);
-  stroke(toShoe, wTubing, STEEL, { id: "wv-tubing" });       // the tubing wall
-  stroke(toShoe, bore, "#ffffff", { id: "wv-bore" });        // the bore
+  // cleared to white first: the annulus is laid down full width behind it, and a see-through
+  // liquid colour over the lift gas came out olive
+  stroke(toShoe, bore, "#ffffff");
+  stroke(toShoe, bore, PHASE_COLOURS.oil, { id: "wv-bore", opacity: 0.38 });
 
-  // ---- the flow regimes inside the tubing ----
-  // The pattern the correlation reports at each depth is DRAWN, not tinted: the liquid it is
-  // flowing in, and over that the gas in whatever shape that regime takes.  Neighbouring intervals
-  // reporting the same pattern are first collapsed into one run, so a regime is one continuous
-  // stretch of pipe rather than thirty-odd identical slices.
-  /** @type {{from: number, to: number, family: string, regime: string, px: number}[]} */
+  // ---- the flow regimes, drawn rather than tinted ----
+  /** @type {{from: number, to: number, family: string, regime: string, px: number,
+   *           riserFrom?: number}[]} */
   const bands = [];
   /** @type {Set<string>} */
   const families = new Set();
@@ -334,33 +325,15 @@ export function render(svg, spec) {
     }
   }
   if (!bands.length) bands.push({ from: 0, to: spec.shoe_md, family: "liquid", regime: "", px: 0 });
-  bands[0].from = topMd;          // the shallowest band carries on up the tree, as the fluid does
+  bands[0].from = topMd;
   for (const b of bands) {
     b.px = Math.abs(at(b.to)[1] - at(b.from)[1]) + Math.abs(at(b.to)[0] - at(b.from)[0]);
+    b.riserFrom = b.from;
   }
+  // the shapes stop short of the tee, where the mask would otherwise crop them into a block
+  if (tree) bands[0].riserFrom = topMd + 26 / scaleY;
 
-  for (const b of bands) {
-    const d = segment(b.from, b.to);
-    if (b.family === "annular" || b.family === "gas") {
-      // a gas core, with the liquid carried as a film on the wall
-      stroke(d, bore, GASFILL, { opacity: 0.85, class: "wv-fill" });
-      if (b.family === "annular") {
-        for (const side of [-1, 1]) {
-          svg.appendChild(node("path", { class: "wv-film", d: filmPath(b, side),
-                                         fill: "none", stroke: PHASE_COLOURS.oil, "stroke-width": bore * 0.15,
-                                         "stroke-linecap": "butt", opacity: 0.85 }));
-        }
-      }
-    } else {
-      stroke(d, bore, PHASE_COLOURS.oil, { opacity: 0.5, class: "wv-fill" });
-    }
-  }
-
-  /**
-   * The wavy inner edge of the liquid film in an annular section, down one wall.  It is a real
-   * path along the well rather than a straight band, so it waves on a deviated well too.
-   * @param {{from: number, to: number}} b @param {number} side
-   */
+  /** The wavy inner edge of the liquid film in an annular section. @param {{from:number,to:number}} b @param {number} side */
   function filmPath(b, side) {
     const n = Math.max(8, Math.round(Math.abs(b.to - b.from) / 40));
     const pts = [];
@@ -373,220 +346,235 @@ export function render(svg, spec) {
     }
     return `M${pts.join(" L")}`;
   }
-
-  // the hover labels, laid over the intervals the correlation actually reported
+  for (const b of bands) {
+    if (b.family !== "annular" && b.family !== "gas") continue;
+    stroke(segment(b.from, b.to), bore, gasAt((b.from + b.to) / 2),
+           { class: "wv-fill", opacity: 0.85 });
+    if (b.family === "annular") {
+      for (const side of [-1, 1]) {
+        svg.appendChild(node("path", { class: "wv-film", d: filmPath(b, side), fill: "none",
+                                       stroke: PHASE_COLOURS.oil, "stroke-width": bore * 0.15,
+                                       "stroke-linecap": "butt", opacity: 0.85 }));
+      }
+    }
+  }
+  // the hover labels, over the intervals the correlation actually reported
   if (spec.pattern) {
     for (let i = 0; i < spec.pattern.regime.length; i++) {
       const from = spec.pattern.md[i];
       if (from >= spec.shoe_md) continue;
       const to = Math.min(spec.pattern.md[i + 1] ?? spec.shoe_md, spec.shoe_md);
-      const p = node("path", { class: "wv-hit", d: segment(from, to), fill: "none",
-                               stroke: "transparent", "stroke-width": bore + 6,
-                               "stroke-linecap": "butt" });
       const fam = flowFamily(spec.pattern.regime[i]);
-      p.appendChild(node("title", {}, `${fam ? FLOW_FAMILIES[fam].label : spec.pattern.regime[i]}`
-        + ` flow, ${fmt(spec.toShown(from))}-${fmt(spec.toShown(to))} ${spec.lengthUnit} MD`));
-      svg.appendChild(p);
+      tip(svg.appendChild(node("path", { class: "wv-hit", d: segment(from, to), fill: "none",
+                                         stroke: "transparent", "stroke-width": bore + 6,
+                                         "stroke-linecap": "butt" })),
+          `${fam ? FLOW_FAMILIES[fam].label : spec.pattern.regime[i]}`
+          + ` flow, ${fmt(spec.toShown(from))}-${fmt(spec.toShown(to))} ${spec.lengthUnit} MD`);
     }
   }
 
-  // ---- the production packer, sealing tubing to casing above the perforations ----
-  /**
-   * A seal across the annulus: the red crossed block that means "nothing gets past here".
-   * @param {number} md @param {string} cls
-   */
-  const sealAcross = (md, cls) => {
-    const p = at(md);
-    const n = normalAt(md);
-    const len = (wAnnulus - wTubing) / 2;
+  // ---- the strings: ONE bold line each, with the fluid filling right up to it ----
+  // A pair of lines for each string read as four pipes rather than two.
+  const INK = "#111827";
+  const casTop = tree ? annTop : 0;
+  for (const s of [-1, 1]) {
+    const cas = spec.md.map((_, i) => {
+      const n = normalAt(spec.md[i]);
+      return [points[i][0] + n[0] * s * rCasing, points[i][1] + n[1] * s * rCasing];
+    });
+    const top = at(casTop);
+    const nTop = normalAt(casTop);
+    tip(svg.appendChild(node("path", { class: "wv-casing",
+      d: `M${top[0] + nTop[0] * s * rCasing},${top[1] + nTop[1] * s * rCasing} `
+         + cas.map((p) => `L${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" "),
+      fill: "none", stroke: INK, "stroke-width": 3.2 })), "Production casing");
+    const tub = [];
+    for (let md = topMd; md < spec.shoe_md; md += Math.max(perf_md / 40, 1)) {
+      const p = at(md);
+      const n = normalAt(md);
+      tub.push([p[0] + n[0] * s * rTubing, p[1] + n[1] * s * rTubing]);
+    }
+    const endP = at(spec.shoe_md);
+    const endN = normalAt(spec.shoe_md);
+    tub.push([endP[0] + endN[0] * s * rTubing, endP[1] + endN[1] * s * rTubing]);
+    const nCap = normalAt(topMd);
+    const capP = [bx + nCap[0] * s * rTubing, CAP_Y];
+    tip(svg.appendChild(node("path", { class: "wv-tubing",
+      d: `M${capP[0]},${capP[1]} ` + tub.map((p) => `L${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" "),
+      fill: "none", stroke: INK, "stroke-width": 3.2 })), "Production tubing");
+  }
+
+  // ---- the seals: red crossed blocks across the annulus ----
+  /** @param {number} cx @param {number} cy @param {number} angle @param {string} cls @param {string} label */
+  const sealBlock = (cx, cy, angle, cls, label) => {
+    const len = rCasing - rTubing;
+    const g = node("g", { class: cls, transform: `rotate(${angle} ${cx} ${cy})` });
+    g.appendChild(node("rect", { x: cx - len / 2, y: cy - 7, width: len, height: 14,
+                                 fill: "#fecaca", stroke: SEAL, "stroke-width": 1.5 }));
+    g.appendChild(node("line", { x1: cx - len / 2, y1: cy - 7, x2: cx + len / 2, y2: cy + 7,
+                                 stroke: SEAL, "stroke-width": 1.3 }));
+    g.appendChild(node("line", { x1: cx - len / 2, y1: cy + 7, x2: cx + len / 2, y2: cy - 7,
+                                 stroke: SEAL, "stroke-width": 1.3 }));
+    tip(g, label);
+    svg.appendChild(g);
+  };
+  const packPt = at(spec.packer_md);
+  {
+    const n = normalAt(spec.packer_md);
     const angle = Math.atan2(n[1], n[0]) * 180 / Math.PI;
     for (const side of [-1, 1]) {
-      const cx = p[0] + n[0] * side * (wAnnulus + wTubing) / 4;
-      const cy = p[1] + n[1] * side * (wAnnulus + wTubing) / 4;
-      const g = node("g", { class: cls, transform: `rotate(${angle} ${cx} ${cy})` });
-      g.appendChild(node("rect", { x: cx - len / 2, y: cy - 9, width: len, height: 18,
-                                   fill: "#fee2e2", stroke: SEAL, "stroke-width": 1.6 }));
-      g.appendChild(node("line", { x1: cx - len / 2, y1: cy - 9, x2: cx + len / 2, y2: cy + 9,
-                                   stroke: SEAL, "stroke-width": 1.4 }));
-      g.appendChild(node("line", { x1: cx - len / 2, y1: cy + 9, x2: cx + len / 2, y2: cy - 9,
-                                   stroke: SEAL, "stroke-width": 1.4 }));
-      svg.appendChild(g);
+      sealBlock(packPt[0] + n[0] * side * (rCasing + rTubing) / 2,
+                packPt[1] + n[1] * side * (rCasing + rTubing) / 2,
+                angle, "wv-packer", "Production packer: seals the annulus above the perforations");
     }
-    return p;
-  };
-  const packPt = sealAcross(spec.packer_md, "wv-packer");
+  }
 
-  // ---- the open tubing shoe, hanging below the packer in the perforated interval ----
+  // ---- the open tubing tailpipe, ending at the top of the perforations ----
   const shoePt = at(spec.shoe_md);
   const shoeN = normalAt(spec.shoe_md);
   for (const side of [-1, 1]) {
-    svg.appendChild(node("path", {
-      d: `M${shoePt[0] + shoeN[0] * side * (bore / 2 + 3.5)},`
-         + `${shoePt[1] + shoeN[1] * side * (bore / 2 + 3.5)} `
-         + `l${shoeN[0] * side * 4},${shoeN[1] * side * 4}`,
-      stroke: STEEL_DARK, "stroke-width": 2.5, "stroke-linecap": "round" }));
+    tip(svg.appendChild(node("path", {
+      d: `M${shoePt[0] + shoeN[0] * side * rTubing},${shoePt[1] + shoeN[1] * side * rTubing} `
+         + `l${shoeN[0] * side * 6},${shoeN[1] * side * 6}`,
+      stroke: INK, "stroke-width": 3, "stroke-linecap": "round" })), "Open tubing tailpipe");
   }
 
-  // ---- the perforations, through both casing walls ----
+  // ---- the perforations: horizontal, through both walls, stopping short of the shoe ----
   /** @type {{x: number, y: number, nx: number, ny: number}[]} */
   const perfs = [];
-  const nPerf = Math.max(4, Math.min(9, Math.round((perf_md - spec.perf_top) / 60)));
+  const perfBot = spec.perf_top + (perf_md - spec.perf_top) * 0.62;
+  const nPerf = clamp(Math.round((payBot - payTop) * 0.62 / 6), 4, 9);
   for (let i = 0; i < nPerf; i++) {
-    const md = spec.perf_top + (perf_md - spec.perf_top) * (i + 0.5) / nPerf;
+    const md = spec.perf_top + (perfBot - spec.perf_top) * (i + 0.4) / nPerf;
     const p = at(md);
     const n = normalAt(md);
     for (const side of [-1, 1]) {
-      const from = wCasing / 2 - 1;
-      const to = wCement / 2 + 13;
-      svg.appendChild(node("path", {
-        d: `M${p[0] + n[0] * side * from},${p[1] + n[1] * side * from} `
+      const to = rCasing + 22;
+      tip(svg.appendChild(node("path", {
+        d: `M${p[0] + n[0] * side * rCasing},${p[1] + n[1] * side * rCasing} `
            + `L${p[0] + n[0] * side * to},${p[1] + n[1] * side * to}`,
-        stroke: "#8c3b2e", "stroke-width": 2.2, "stroke-linecap": "round" }));
+        stroke: "#7c3f1d", "stroke-width": 2.6, "stroke-linecap": "round" })), "Perforations");
       perfs.push({ x: p[0] + n[0] * side * to, y: p[1] + n[1] * side * to,
                    nx: -n[0] * side, ny: -n[1] * side });
     }
   }
-  // ---- the casing shoe at total depth ----
+
+  // ---- the casing shoe, at the bottom of the reservoir ----
+  // A solid wedge standing on the bottom of the casing: straight edge up the casing wall, flat base
+  // along the bottom and the slope facing out into the formation.
   const endPt = at(perf_md);
   const endN = normalAt(perf_md);
+  const down = [endN[1], -endN[0]];
   svg.appendChild(node("path", {
-    d: `M${endPt[0] - endN[0] * wCasing / 2},${endPt[1] - endN[1] * wCasing / 2} `
-       + `L${endPt[0] + endN[0] * wCasing / 2},${endPt[1] + endN[1] * wCasing / 2}`,
-    stroke: STEEL_DARK, "stroke-width": 2.5 }));
+    d: `M${endPt[0] - endN[0] * rCasing},${endPt[1] - endN[1] * rCasing} `
+       + `L${endPt[0] + endN[0] * rCasing},${endPt[1] + endN[1] * rCasing}`,
+    stroke: INK, "stroke-width": 3.2 }));
   for (const side of [-1, 1]) {
-    const o = wCasing / 2 - 1;
-    const ax = endPt[0] + endN[0] * side * o;
-    const ay = endPt[1] + endN[1] * side * o;
-    const ix = endPt[0] + endN[0] * side * (o - 9);
-    const iy = endPt[1] + endN[1] * side * (o - 9);
-    const dir = [-endN[1], endN[0]];                    // along the well, upwards
-    svg.appendChild(node("polygon", {
-      points: `${ax},${ay} ${ix},${iy} ${ax - dir[0] * 11},${ay - dir[1] * 11}`,
-      fill: STEEL_DARK }));
+    const ax = endPt[0] + endN[0] * side * rCasing;
+    const ay = endPt[1] + endN[1] * side * rCasing;
+    const up = 16 * girth;
+    const out = 9 * girth;
+    tip(svg.appendChild(node("polygon", { class: "wv-shoe",
+      points: `${ax},${ay} ${ax - down[0] * up},${ay - down[1] * up} `
+              + `${ax + endN[0] * side * out},${ay + endN[1] * side * out}`,
+      fill: INK })), "Casing shoe");
   }
 
-  // ---- the gas lift valve and its mandrel ----
-  // The valve is in a mandrel bolted to the tubing, so it sits hard against the outside of the
-  // tubing wall - not floating in the annulus - and its port goes through that wall into the bore.
+  // ---- the side pocket mandrel, with the gas lift valve in it ----
   let glCentre = null;
-  const GL_W = 13;
   if (glOn) {
     const p = at(glMd);
     const n = normalAt(glMd);
-    const off = wTubing / 2 + GL_W / 2;                  // flush against the tubing wall
-    const cx = p[0] + n[0] * liftSide * off;
-    const cy = p[1] + n[1] * liftSide * off;
-    glCentre = [cx, cy];
-    const angle = Math.atan2(n[1], n[0]) * 180 / Math.PI;
-    svg.appendChild(node("path", {
-      d: `M${p[0] + n[0] * liftSide * (wTubing / 2)},${p[1] + n[1] * liftSide * (wTubing / 2)} `
-         + `L${p[0] + n[0] * liftSide * (bore / 2 - 4)},${p[1] + n[1] * liftSide * (bore / 2 - 4)}`,
-      stroke: PHASE_COLOURS.liftGas, "stroke-width": 3.4, "stroke-linecap": "round" }));
-    svg.appendChild(node("rect", { id: "wv-glvalve",
-                                   x: cx - GL_W / 2, y: cy - 9, width: GL_W, height: 18, rx: 2,
-                                   fill: "#ffffff", stroke: PHASE_COLOURS.liftGas, "stroke-width": 2,
-                                   transform: `rotate(${angle} ${cx} ${cy})` }));
+    const w = Math.max((rCasing - rTubing) * 0.3, 7);
+    const h = Math.max(bore * 1.1, 32);
+    const px = p[0] + n[0] * liftSide * rTubing;
+    const py = p[1] + n[1] * liftSide * rTubing;
+    const angle = Math.atan2(n[1] * liftSide, n[0] * liftSide) * 180 / Math.PI;
+    glCentre = [px + n[0] * liftSide * w / 2, py + n[1] * liftSide * w / 2];
+    tip(svg.appendChild(node("path", { id: "wv-glvalve",
+      d: `M0,${-h / 2} C${w * 0.95},${-h * 0.3} ${w},${-h * 0.1} ${w},0 `
+         + `C${w},${h * 0.1} ${w * 0.95},${h * 0.3} 0,${h / 2} Z`,
+      transform: `translate(${px},${py}) rotate(${angle})`,
+      fill: "#ffffff", stroke: INK, "stroke-width": 1.6, "stroke-linejoin": "round" })),
+      "Side pocket mandrel with the gas lift valve, injecting into the tubing");
+    svg.appendChild(node("circle", { cx: glCentre[0], cy: glCentre[1],
+                                     r: Math.min(w * 0.4, 4), fill: PHASE_COLOURS.liftGas }));
   }
 
-  // ---- the wellhead: the annulus seal, and the gas lift injection wing below it ----
-  /**
-   * The standard circle-and-cross valve symbol.  Open is drawn in full ink, shut is greyed and
-   * filled in, so a glance says which it is.
-   * @param {number} x @param {number} y @param {string} id @param {boolean} open
-   */
-  const valveSymbol = (x, y, id, open) => {
+  // ---- the valve symbol: context, not the subject, so it is drawn in grey ----
+  /** @param {number} x @param {number} y @param {string} id @param {boolean} open @param {string} label */
+  const valveSymbol = (x, y, id, open, label) => {
     const g = node("g", { id, class: "wv-valve" });
-    const r = 8.5;
-    const ink = open ? STEEL_DARK : "#9aa7b4";
-    g.appendChild(node("circle", { cx: x, cy: y, r, fill: open ? "#ffffff" : "#e2e8f0",
-                                   stroke: ink, "stroke-width": 1.8 }));
-    const k = r * 0.707;
+    const ink = open ? "#8d9aa8" : "#c3ccd4";
+    const k = VR * 0.707;
+    g.appendChild(node("circle", { cx: x, cy: y, r: VR, fill: "#ffffff", stroke: ink,
+                                   "stroke-width": 1.5 }));
     g.appendChild(node("line", { x1: x - k, y1: y - k, x2: x + k, y2: y + k,
-                                 stroke: ink, "stroke-width": 1.8 }));
+                                 stroke: ink, "stroke-width": 1.5 }));
     g.appendChild(node("line", { x1: x - k, y1: y + k, x2: x + k, y2: y - k,
-                                 stroke: ink, "stroke-width": 1.8 }));
+                                 stroke: ink, "stroke-width": 1.5 }));
+    tip(g, `${label}${open ? "" : " (shut)"}`);
     return g;
   };
 
   if (tree) {
-    // the annulus is sealed at surface, around the tubing: that is why the lift gas needs its own
-    // way in, a little below
-    const len = (wAnnulus - wTubing) / 2;
+    // the annulus seal, standing above the ground line on the wellhead
     for (const side of [-1, 1]) {
-      const cx = bx + side * (wAnnulus + wTubing) / 4;
-      const g = node("g", { class: "wv-wellhead-seal" });
-      g.appendChild(node("rect", { x: cx - len / 2, y: ground - 9, width: len, height: 18,
-                                   fill: "#fee2e2", stroke: SEAL, "stroke-width": 1.6 }));
-      g.appendChild(node("line", { x1: cx - len / 2, y1: ground - 9, x2: cx + len / 2,
-                                   y2: ground + 9, stroke: SEAL, "stroke-width": 1.4 }));
-      g.appendChild(node("line", { x1: cx - len / 2, y1: ground + 9, x2: cx + len / 2,
-                                   y2: ground - 9, stroke: SEAL, "stroke-width": 1.4 }));
-      svg.appendChild(g);
+      sealBlock(bx + side * (rCasing + rTubing) / 2, SEAL_Y, 0, "wv-wellhead-seal",
+                "Wellhead annulus seal: the annulus is closed at surface");
     }
-
+    // The gas lift inlet is ALWAYS drawn, open when injecting and shut when not, so the two states
+    // are the same picture with one thing changed rather than two different drawings.
+    const tipX = bx + wingDir * rCasing;
+    const outX = tipX + wingDir * (wingRoom - 10);
+    svg.appendChild(node("line", { x1: outX, y1: INLET_Y, x2: tipX, y2: INLET_Y,
+                                   stroke: glOn ? PHASE_COLOURS.liftGas : "#9aa7b4",
+                                   "stroke-width": 3, "stroke-linecap": "round" }));
     if (glOn) {
-      // the injection wing: a side outlet into the annulus, just under the seal
-      const portY = ground + 30;
-      const tip = bx + wingDir * wAnnulus / 2;
-      const dir = wingDir;
-      const outX = tip + dir * 70;
-      svg.appendChild(node("line", { x1: outX, y1: portY, x2: tip, y2: portY,
-                                     stroke: PHASE_COLOURS.liftGas, "stroke-width": 3,
-                                     "stroke-linecap": "round" }));
       svg.appendChild(node("polygon", {
-        points: `${tip},${portY} ${tip - dir * 10},${portY - 5} ${tip - dir * 10},${portY + 5}`,
-        fill: PHASE_COLOURS.liftGas }));
-      svg.appendChild(valveSymbol(tip + dir * 42, portY, "wv-annwing", true));
-      svg.appendChild(node("text", { x: outX, y: portY - 15, class: "wv-lbl", fill: "#b23c20",
-                                     "text-anchor": dir < 0 ? "start" : "end" }, "lift gas in"));
+        points: `${tipX},${INLET_Y} ${tipX + wingDir * 11},${INLET_Y - 5.5} `
+                + `${tipX + wingDir * 11},${INLET_Y + 5.5}`, fill: PHASE_COLOURS.liftGas }));
     }
-  }
+    svg.appendChild(valveSymbol(outX - wingDir * (wingRoom - 10) * 0.42, INLET_Y, "wv-annwing",
+                                glOn, "Annulus wing valve: lift gas into the annulus"));
+    svg.appendChild(node("text", { x: Math.max(outX - VR - 4, 4), y: INLET_Y - VR - 9,
+                                   class: "wv-lbl", fill: glOn ? "#8a5a00" : "#64748b",
+                                   "text-anchor": wingDir < 0 ? "start" : "end" },
+                                 glOn ? "lift gas in: ON" : "lift gas in: OFF"));
 
-  // ---- the Christmas tree ----
-  if (tree) {
-    const g = node("g");
-    const steel = { fill: "#cbd5e1", stroke: STEEL, "stroke-width": 1.2 };
-    // the stem, carrying the tubing bore on up from the wellhead
-    g.appendChild(node("rect", { x: bx - wTubing / 2, y: SWAB_Y, width: wTubing,
-                                 height: ground - SWAB_Y, ...steel }));
-    // the wing arm out of the tee
-    const armH = Math.min(wTubing, 30);
-    g.appendChild(node("rect", { x: bx + wTubing / 2 - 1, y: TEE_Y - armH / 2,
-                                 width: ARM_END - wTubing / 2, height: armH, ...steel }));
-    g.appendChild(node("rect", { x: bx - wTubing / 2 - 5, y: SWAB_Y - 8, width: wTubing + 10,
-                                 height: 9, rx: 1.5, fill: STEEL }));
-    svg.appendChild(g);
-    // the bores: the stem above the tee carries the same fluid as the arm, so both are filled with
-    // whatever the shallowest regime in the tubing is
+    // the tee and the flowline out of it
+    const armH = Math.min(bore * 1.3, 34);
+    const grey = { fill: "#d7dde3", stroke: "#8d9aa8", "stroke-width": 1.4 };
+    tip(svg.appendChild(node("rect", { x: bx + rTubing - 1, y: TEE_Y - armH / 2,
+                                       width: armEnd - bx - rTubing, height: armH, ...grey })),
+        "Flowline");
+    const armBore = Math.min(bore * 0.72, 30);
     const shallow = bands[0];
-    const fill = shallow.family === "annular" || shallow.family === "gas"
-      ? GASFILL : PHASE_COLOURS.oil;
-    const fillOp = shallow.family === "annular" || shallow.family === "gas" ? 0.85 : 0.5;
-    const armBore = Math.min(bore, 22);
-    svg.appendChild(node("rect", { id: "wv-armbore", x: bx + wTubing / 2 - 1,
-                                   y: TEE_Y - armBore / 2, width: ARM_END - wTubing / 2 - 2,
-                                   height: armBore, fill, opacity: fillOp }));
-    svg.appendChild(node("rect", { x: bx - bore / 2, y: SWAB_Y, width: bore,
-                                   height: at(topMd)[1] - SWAB_Y, fill, opacity: fillOp }));
-    // and the outward flow arrow off the end of the arm
-    const ax = bx + ARM_END;
-    svg.appendChild(node("line", { x1: ax, y1: TEE_Y, x2: ax + 26, y2: TEE_Y,
-                                   stroke: STEEL_DARK, "stroke-width": 2.4 }));
+    const gassy = shallow.family === "annular" || shallow.family === "gas";
+    svg.appendChild(node("rect", { id: "wv-armbore", x: bx - rTubing,
+                                   y: TEE_Y - armBore / 2, width: armEnd - bx + rTubing - 2,
+                                   height: armBore,
+                                   fill: gassy ? gasAt(topMd) : PHASE_COLOURS.oil,
+                                   opacity: gassy ? 0.85 : 0.38 }));
+    svg.appendChild(node("rect", { x: bx - rTubing - 6, y: CAP_Y - 10, width: 2 * rTubing + 12,
+                                   height: 10, rx: 1.5, fill: "#8d9aa8" }));
+    svg.appendChild(node("line", { x1: armEnd, y1: TEE_Y, x2: armEnd + 20, y2: TEE_Y,
+                                   stroke: "#8d9aa8", "stroke-width": 2.2 }));
     svg.appendChild(node("polygon", { id: "wv-outflow",
-      points: `${ax + 36},${TEE_Y} ${ax + 24},${TEE_Y - 6} ${ax + 24},${TEE_Y + 6}`,
-      fill: STEEL_DARK }));
+      points: `${armEnd + 30},${TEE_Y} ${armEnd + 18},${TEE_Y - 6} ${armEnd + 18},${TEE_Y + 6}`,
+      fill: "#8d9aa8" }));
 
-    svg.appendChild(valveSymbol(bx, SWAB_Y, "wv-swab", spec.masterOpen !== false));
-    svg.appendChild(valveSymbol(bx + 52, TEE_Y, "wv-wing", spec.chokeOpen !== false));
-    svg.appendChild(valveSymbol(bx, UPPER_MASTER_Y, "wv-master", spec.masterOpen !== false));
-    svg.appendChild(valveSymbol(bx, LOWER_MASTER_Y, "wv-lower-master", spec.masterOpen !== false));
+    svg.appendChild(valveSymbol(bx, SWAB_Y, "wv-swab", false, "Swab valve"));
+    svg.appendChild(valveSymbol(bx + (armEnd - bx) * 0.62, TEE_Y, "wv-wing",
+                                spec.chokeOpen !== false, "Production wing valve"));
+    svg.appendChild(valveSymbol(bx, UM_Y, "wv-master", spec.masterOpen !== false,
+                                "Upper master valve"));
+    svg.appendChild(valveSymbol(bx, LM_Y, "wv-lower-master", spec.masterOpen !== false,
+                                "Lower master valve"));
   }
 
   // ---- the depth scale ----
-  // The scale is TRUE VERTICAL DEPTH, which is both what the chart beside it plots against and what
-  // the ticks have to be if a depth is to be at the same height in the two panels.
   const stepFt = maxTvd > 12000 ? 4000 : maxTvd > 6000 ? 2000 : maxTvd > 2500 ? 1000 : 500;
-  const axisX = earthL - 4;
   for (let d = 0; d <= maxTvd + 1; d += stepFt) {
     const y = Y(d);
     svg.appendChild(node("line", { x1: axisX - 5, y1: y, x2: axisX, y2: y, stroke: "#94a3b8",
@@ -595,53 +583,32 @@ export function render(svg, spec) {
                                    "text-anchor": "end" }, fmt(spec.toShown(d))));
   }
   svg.appendChild(node("line", { x1: axisX, y1: ground, x2: axisX, y2: Y(maxTvd),
-                                 stroke: "#cbd5e1", "stroke-width": 0.8 }));
+                                 stroke: "#e2e8f0", "stroke-width": 0.8 }));
   svg.appendChild(node("text", { x: 2, y: ground - 14, class: "wv-depth" },
                                `TVD, ${spec.lengthUnit}`));
 
-  // ---- the labels ----
-  if (!compact) {
-    const labelX = W - pad.r + 18;
-    /** @type {[number, number, string][]} */
-    const rows = [];
-    if (tree) {
-      rows.push([bx + wTubing / 2, SWAB_Y, "Swab valve"]);
-      rows.push([bx + 52, TEE_Y + 9, "Production wing"]);
-      rows.push([bx + wTubing / 2, UPPER_MASTER_Y, "Upper master"]);
-      rows.push([bx + wTubing / 2, LOWER_MASTER_Y, "Lower master"]);
-      rows.push([bx + (wAnnulus + wTubing) / 4, ground, "Annulus seal"]);
-    }
-    rows.push([at(perf_md * 0.3)[0] + wCasing / 2, at(perf_md * 0.3)[1], "Production casing"]);
-    rows.push([at(perf_md * 0.42)[0] + wAnnulus / 2 - 4, at(perf_md * 0.42)[1], "Annulus"]);
-    rows.push([at(perf_md * 0.56)[0] + bore / 2, at(perf_md * 0.56)[1], "Production tubing"]);
-    // the leader starts at the valve itself, on whichever side the lift gas is, even though that
-    // means crossing the tubing: a leader that stopped short of it would point at nothing
-    if (glCentre) rows.push([glCentre[0], glCentre[1], "Gas lift valve"]);
-    rows.push([packPt[0] + wAnnulus / 2 - 4, packPt[1], "Production packer"]);
-    rows.push([shoePt[0] + bore / 2, shoePt[1] + 4, "Tubing tailpipe"]);
-    rows.push([at((spec.perf_top + perf_md) / 2)[0] + wCement / 2 + 12,
-               at((spec.perf_top + perf_md) / 2)[1], "Perforations"]);
-    rows.push([endPt[0] + wCasing / 2 - 6, endPt[1], "Casing shoe"]);
-    let lastY = -99;
-    for (const [fx, fy, text] of rows) {
-      const y = Math.max(fy, lastY + 15);
-      lastY = y;
-      svg.appendChild(node("path", { d: `M${fx},${fy} L${labelX - 7},${y}`, stroke: "#cbd5e1",
-                                     "stroke-width": 0.8, fill: "none" }));
-      svg.appendChild(node("circle", { cx: fx, cy: fy, r: 1.6, fill: "#cbd5e1" }));
-      svg.appendChild(node("text", { x: labelX, y: y + 3.2, class: "wv-lbl" }, text));
-    }
-  }
-
   // ---- the layers the moving fluid is drawn in ----
+  // The fluid is masked to the inside of the pipe it is in.  The mask leaves out the pipe above the
+  // swab valve, which is shut, so nothing is ever drawn standing in it.
+  const armOut = tree ? { y: TEE_Y, from: bx + rTubing, to: armEnd + 26 } : null;
+  const mask = node("mask", { id: "wv-inside", maskUnits: "userSpaceOnUse",
+                              x: 0, y: 0, width: W, height: H });
+  mask.appendChild(node("path", { d: toShoe, fill: "none", stroke: "#ffffff",
+                                  "stroke-width": bore, "stroke-linecap": "butt" }));
+  if (armOut) {
+    const armBore = Math.min(bore * 0.72, 30);
+    mask.appendChild(node("rect", { x: armOut.from - 2, y: armOut.y - armBore / 2,
+                                    width: armOut.to - armOut.from + 6, height: armBore,
+                                    fill: "#ffffff" }));
+  }
+  defs.appendChild(mask);
   svg.appendChild(node("g", { id: "wv-inflow" }));
-  svg.appendChild(node("g", { id: "wv-fluid" }));
-  svg.appendChild(node("g", { id: "wv-jet" }));
+  svg.appendChild(node("g", { id: "wv-fluid", mask: "url(#wv-inside)" }));
+  svg.appendChild(node("g", { id: "wv-jet", mask: "url(#wv-inside)" }));
 
-  return { svg, spec, bands, perfs, shoePt, glCentre, glMd, glOn, liftSide,
-           bore, wTubing, wAnnulus, at, normalAt, tiltAt, topMd, families,
-           arm: tree ? { y: TEE_Y, from: bx, to: bx + ARM_END } : null,
-           gasFill: GASFILL };
+  return { svg, spec, bands, perfs, shoePt, glCentre, glMd, glOn, liftSide, annTop,
+           bore, wTubing: 2 * rTubing, wAnnulus: 2 * rCasing, at, normalAt, tiltAt, topMd,
+           families, girth, arm: armOut, gasAt };
 }
 
 /**
@@ -715,21 +682,22 @@ export function animate(view) {
         // Taylor bubbles nearly filling the bore, with liquid slugs between them
         const w = bore * 0.74;
         const n = clamp(Math.round(px / (w * 2.6)), 1, 10);
-        add("taylor", () => node("path", { d: taylorPath(w), fill: scene.gasFill, opacity: 0.92 }),
+        add("taylor", () => node("path", { d: taylorPath(w), fill: scene.gasAt(band.to),
+                                           "data-gas": 1, opacity: 0.92 }),
             n, 1);
         // and the small bubbles carried in the liquid between them
         const m = clamp(Math.round(px / 34), 1, 10);
-        add("bubble", () => node("circle", { r: bore * 0.07, fill: scene.gasFill, opacity: 0.9 }),
+        add("bubble", () => node("circle", { r: bore * 0.07, fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.9 }),
             m, 0.78);
       } else if (band.family === "bubble" || band.family === "liquid") {
         const n = band.family === "liquid" ? 0
           : clamp(Math.round(px / 15 * gassy), 2, 26);
         add("bubble", () => node("circle", { r: bore * (0.055 + Math.random() * 0.045),
-                                             fill: scene.gasFill, opacity: 0.9 }), n, 1);
+                                             fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.9 }), n, 1);
       } else if (band.family === "churn") {
         const n = clamp(Math.round(px / 30), 2, 9);
         add("churn", () => node("path", { d: churnPath(bore * 0.78, Math.random),
-                                          fill: scene.gasFill, opacity: 0.88 }), n, 1.15);
+                                          fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.88 }), n, 1.15);
         const m = clamp(Math.round(px / 26), 2, 8);
         add("froth", () => node("ellipse", { rx: bore * 0.3, ry: bore * 0.09,
                                              fill: PHASE_COLOURS.oil, opacity: 0.75 }), m, 1.05);
@@ -742,7 +710,7 @@ export function animate(view) {
                                            opacity: 0.95 }), n, 2.1);
       } else {
         const n = clamp(Math.round(px / 22), 2, 14);
-        add("bubble", () => node("circle", { r: bore * 0.06, fill: scene.gasFill, opacity: 0.8 }),
+        add("bubble", () => node("circle", { r: bore * 0.06, fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.8 }),
             n, 1);
       }
       // the water riding in the liquid, in proportion to the water cut
@@ -784,11 +752,8 @@ export function animate(view) {
     armFlow = [];
     if (scene.arm) {
       const shallow = scene.bands[0];
-      const gasArm = shallow.family === "annular" || shallow.family === "gas";
-      for (let i = 0; i < 6; i++) {
-        const c = node("circle", { r: gasArm ? 2 : 2.6,
-                                   fill: gasArm ? scene.gasFill
-                                     : (i % 3 === 0 ? PHASE_COLOURS.water : PHASE_COLOURS.oil) });
+            for (let i = 0; i < 6; i++) {
+        const c = node("circle", { r: 2.6, fill: PHASE_COLOURS.oil });
         host.appendChild(c);
         armFlow.push({ u: i / 6, node: c });
       }
