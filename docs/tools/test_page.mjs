@@ -46,8 +46,14 @@ await page.goto(BASE, { waitUntil: "networkidle" });
 await page.$$eval("details.group", (ds) => ds.forEach((d) => { d.open = true; }));
 
 const val = (id) => page.$eval(`#${id}`, (n) => n.value);
+// Both events, because that is what a real person does: a browser fires input and then change
+// when a drop-down is picked from, and some of the page hangs off change.
 const setVal = async (id, v) => {
-  await page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event("input", { bubbles: true })); }, v);
+  await page.$eval(`#${id}`, (n, v) => {
+    n.value = v;
+    n.dispatchEvent(new Event("input", { bubbles: true }));
+    n.dispatchEvent(new Event("change", { bubbles: true }));
+  }, v);
 };
 // The rates across the top, the numbers under the boxes, and the labels written onto the inflow
 // chart itself: between them they are what the page reports, and a check should not care which of
@@ -521,6 +527,49 @@ for (const [id, want] of Object.entries(defaults)) {
 check(`all ${Object.keys(defaults).length} defaults match the Python DEFAULTS`, wrong.length === 0,
       wrong.join("; "));
 await fresh.close();
+
+// ---- 12b. every inflow model the engine carries is reachable from the page ----
+// A model that is implemented and cross-checked but not on the drop-down may as well not exist,
+// so this walks the list and asks each one for a rate.
+const calcAgain = async () => {
+  await page.click("#btn-calc");
+  await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
+                             null, { timeout: 60000 });
+  await page.waitForTimeout(150);
+};
+const sensChoices = () => page.$$eval("#sens_name option", (ns) => ns.map((n) => n.value));
+for (const [fluid, model, label] of [
+  ["oil", "horizontal", "oil, horizontal Joshi"],
+  ["oil", "horizontal_kg", "oil, horizontal Kuchuk and Goode"],
+  ["gas", "horizontal", "gas, horizontal Joshi"],
+  ["gas", "horizontal_kg", "gas, horizontal Kuchuk and Goode"]]) {
+  await setVal("fluid_type", fluid);
+  await setVal(fluid === "oil" ? "oil_ipr" : "gas_ipr", model);
+  await calcAgain();
+  const rate = numberFrom(await results(),
+                          fluid === "oil" ? "Liquid rate (" : "Gas rate (");
+  check(`${label} gives a rate`, Number.isFinite(rate) && rate > 0,
+        `${rate} - ${await noteText()}`);
+  // and skin and the well's own length can be varied on it, which is the point of a horizontal model
+  const choices = await sensChoices();
+  check(`${label} offers skin and length to vary`,
+        choices.includes("ipr_inputs.skin") && choices.includes("ipr_inputs.length"),
+        choices.join(" "));
+}
+// a model fitted to a well test has its skin already buried in the test, so there is none to vary
+await setVal("fluid_type", "oil");
+await setVal("oil_ipr", "pi");
+check("a PI entry offers no skin to vary", !(await sensChoices()).includes("ipr_inputs.skin"),
+      (await sensChoices()).join(" "));
+// the lift gas is on the fluid rather than in the inflow model, and only when the well is on lift
+check("and no lift gas either, with the well flowing naturally",
+      !(await sensChoices()).some((s) => s.startsWith("fluid.injection")));
+await setVal("lift", "continuous");
+const onLift = await sensChoices();
+check("turning the gas lift on offers its rate and its depth",
+      ["fluid.injection_gas_rate", "fluid.injection_md"].every((s) => onLift.includes(s)),
+      onLift.join(" "));
+await setVal("lift", "none");
 
 // ---- 13. the build marker, so a cached page can be spotted ----
 const build = await page.$eval("#build", (n) => n.innerText);

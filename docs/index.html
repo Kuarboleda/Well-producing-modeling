@@ -286,7 +286,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 23 Nov 2026 05:30 (local)</span>
+  <span class="sub build" id="build">build 23 Nov 2026 06:02 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -330,6 +330,8 @@
               <option value="vogel">Vogel (one flowing test)</option>
               <option value="darcy">Darcy from rock properties</option>
               <option value="fetkovich">Fetkovich (two flowing tests)</option>
+              <option value="horizontal">Horizontal well (Joshi)</option>
+              <option value="horizontal_kg">Horizontal well (Kuchuk and Goode)</option>
             </select>
           </label>
 
@@ -365,9 +367,9 @@
             </div>
           </div>
 
-          <div id="f-darcy">
+          <div id="f-oilrock">
             <div class="row">
-              <label title="Permeability">k <span class="u" data-unit="permeability"></span>
+              <label title="Permeability. For a horizontal well this is the horizontal permeability kh">k <span class="u" data-unit="permeability"></span>
                 <input type="number" id="oil_k" value="50" step="5" min="0.0001">
               </label>
               <label title="Net pay thickness">h <span class="u" data-unit="length"></span>
@@ -383,7 +385,7 @@
               </label>
             </div>
             <div class="row">
-              <label title="Drainage radius">re <span class="u" data-unit="length"></span>
+              <label id="f-oilre" title="Drainage radius. For the Joshi model this is the drainage radius in the horizontal plane">re <span class="u" data-unit="length"></span>
                 <input type="number" id="oil_re" value="1000" step="50" min="0.01">
               </label>
               <label title="Wellbore radius">rw <span class="u" data-unit="length"></span>
@@ -393,6 +395,57 @@
             <label>Skin
               <input type="number" id="oil_skin" value="0" step="0.5">
             </label>
+          </div>
+
+          <!-- what a horizontal well adds: how far it runs, and how much the rock lets flow
+               across the bedding rather than along it -->
+          <div id="f-horiz">
+            <div class="row">
+              <label title="Length of the horizontal section open to the reservoir">Well length <span class="u" data-unit="length"></span>
+                <input type="number" id="h_len" value="1500" step="100" min="1">
+              </label>
+              <label title="Vertical permeability as a fraction of the horizontal: 0.1 is typical of a layered sand">kv / kh
+                <input type="number" id="h_kvkh" value="0.1" step="0.05" min="0.0001" max="100">
+              </label>
+            </div>
+          </div>
+
+          <!-- Kuchuk and Goode put the well anywhere in a closed box, so the box and the well's
+               place in it are the inputs rather than a drainage radius -->
+          <div id="f-hkg">
+            <div class="row">
+              <label title="Length of the drainage box along the well">Box length Lx <span class="u" data-unit="length"></span>
+                <input type="number" id="kg_lx" value="3000" step="100" min="1">
+              </label>
+              <label title="Width of the drainage box across the well">Box width Ly <span class="u" data-unit="length"></span>
+                <input type="number" id="kg_ly" value="2000" step="100" min="1">
+              </label>
+            </div>
+            <div class="row">
+              <label title="Where the well sits along the box, as a fraction of Lx. 0.5 is the middle">Well at x / Lx
+                <input type="number" id="kg_xw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+              <label title="Where the well sits across the box, as a fraction of Ly. 0.5 is the middle">Well at y / Ly
+                <input type="number" id="kg_yw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+            </div>
+            <div class="row">
+              <label title="How high the well stands in the pay, as a fraction of the thickness. 0.5 is the middle">Well at z / h
+                <input type="number" id="kg_zw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+              <label title="Permeability across the well as a fraction of the permeability along it">ky / kx
+                <input type="number" id="kg_kykx" value="1" step="0.1" min="0.0001" max="100">
+              </label>
+            </div>
+            <label title="A gas cap or an aquifer holds the pressure at the top of the pay; a sealed top does not">Top of the reservoir
+              <select id="kg_top">
+                <option value="sealed">Sealed (no flow across the top)</option>
+                <option value="constant_pressure">Constant pressure (gas cap or aquifer)</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="f-darcyv">
             <label>Flow regime
               <select id="oil_regime">
                 <option value="pseudosteady">Pseudosteady state (closed drainage area)</option>
@@ -421,12 +474,14 @@
               <option value="jones">Jones (Darcy plus turbulence)</option>
               <option value="darcy">Darcy (pressure squared)</option>
               <option value="backpressure">Back pressure (C and n)</option>
+              <option value="horizontal">Horizontal well (Joshi)</option>
+              <option value="horizontal_kg">Horizontal well (Kuchuk and Goode)</option>
             </select>
           </label>
 
           <div id="f-gasrock">
             <div class="row">
-              <label title="Permeability">k <span class="u" data-unit="permeability"></span>
+              <label title="Permeability. For a horizontal well this is the horizontal permeability kh">k <span class="u" data-unit="permeability"></span>
                 <input type="number" id="gas_k" value="5" step="1" min="0.0001">
               </label>
               <label title="Net pay thickness">h <span class="u" data-unit="length"></span>
@@ -434,7 +489,7 @@
               </label>
             </div>
             <div class="row">
-              <label title="Drainage radius">re <span class="u" data-unit="length"></span>
+              <label id="f-gasre" title="Drainage radius. For the Joshi model this is the drainage radius in the horizontal plane">re <span class="u" data-unit="length"></span>
                 <input type="number" id="gas_re" value="1000" step="50" min="0.01">
               </label>
               <label title="Wellbore radius">rw <span class="u" data-unit="length"></span>
@@ -449,6 +504,52 @@
                 <input type="number" id="gas_beta" value="0" step="1000000" min="0">
               </label>
             </div>
+          </div>
+
+          <!-- the same two horizontal geometries as the oil side, with their own boxes so the
+               two fluids can be set up differently -->
+          <div id="f-ghoriz">
+            <div class="row">
+              <label title="Length of the horizontal section open to the reservoir">Well length <span class="u" data-unit="length"></span>
+                <input type="number" id="gh_len" value="1500" step="100" min="1">
+              </label>
+              <label title="Vertical permeability as a fraction of the horizontal">kv / kh
+                <input type="number" id="gh_kvkh" value="0.1" step="0.05" min="0.0001" max="100">
+              </label>
+            </div>
+          </div>
+
+          <div id="f-ghkg">
+            <div class="row">
+              <label title="Length of the drainage box along the well">Box length Lx <span class="u" data-unit="length"></span>
+                <input type="number" id="gkg_lx" value="4000" step="100" min="1">
+              </label>
+              <label title="Width of the drainage box across the well">Box width Ly <span class="u" data-unit="length"></span>
+                <input type="number" id="gkg_ly" value="2500" step="100" min="1">
+              </label>
+            </div>
+            <div class="row">
+              <label title="Where the well sits along the box, as a fraction of Lx. 0.5 is the middle">Well at x / Lx
+                <input type="number" id="gkg_xw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+              <label title="Where the well sits across the box, as a fraction of Ly. 0.5 is the middle">Well at y / Ly
+                <input type="number" id="gkg_yw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+            </div>
+            <div class="row">
+              <label title="How high the well stands in the pay, as a fraction of the thickness. 0.5 is the middle">Well at z / h
+                <input type="number" id="gkg_zw" value="0.5" step="0.05" min="0.01" max="0.99">
+              </label>
+              <label title="Permeability across the well as a fraction of the permeability along it">ky / kx
+                <input type="number" id="gkg_kykx" value="1" step="0.1" min="0.0001" max="100">
+              </label>
+            </div>
+            <label title="A gas cap or an aquifer holds the pressure at the top of the pay; a sealed top does not">Top of the reservoir
+              <select id="gkg_top">
+                <option value="sealed">Sealed (no flow across the top)</option>
+                <option value="constant_pressure">Constant pressure (gas cap or aquifer)</option>
+              </select>
+            </label>
           </div>
 
           <div id="f-bp" class="row">

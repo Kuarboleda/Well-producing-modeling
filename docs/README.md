@@ -18,9 +18,21 @@ correlations, the operating point where they cross, the pressure and temperature
 well, continuous gas lift, sensitivities on one input at a time, the correlation chosen for the well
 from its own inputs with the reason given, the correlations compared against a measured downhole
 gauge reading or flowing gradient survey, and matching the chosen one to that data - in oilfield or
-metric units. Still to come: the gas lift valve design, the ESP design, PVT matching to laboratory
-data, horizontal-well and multilayer inflow on the screen (the engine behind them is already
-translated), and the survey table as a table rather than pasted text.
+metric units. Horizontal wells are on the screen for both oil and gas, by Joshi and by Kuchuk and
+Goode. Still to come: the gas lift valve design, PVT matching to laboratory data, multilayer
+(commingled) inflow on the screen - the engine behind it is already translated, but it needs a
+layer table to drive it - and the survey table as a table rather than pasted text.
+
+**What can be varied, one at a time:** wellhead pressure, reservoir pressure, tubing size, water
+cut, producing GOR, and whichever of the inflow model's own numbers it actually has - the
+productivity index for a PI entry, C for a back-pressure curve, the permeability and the skin for
+anything read from the rock, and the well length for a horizontal well. A model fitted to a well
+test (PI, Vogel, Fetkovich, back pressure) has its skin already buried in the test, so there is
+none to vary and none is offered. When the well is on continuous gas lift, the injection rate and
+the injection depth can be varied too: both live on the fluid rather than in the inflow model,
+because what the gas changes is the weight of the column above the injection point. A value the
+model refuses outright - a horizontal well longer than the area it drains, say - is reported in its
+own row rather than throwing the whole sweep away.
 
 ## The interface, and why it is this shape
 

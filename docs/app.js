@@ -94,6 +94,13 @@ const QUANTITY_OF = {
   oil_phi: "fraction", oil_ct: "compressibility", oil_time: "time",
   gas_k: "permeability", gas_h: "length", gas_re: "length", gas_rw: "length",
   gas_skin: null, gas_beta: "inverseLength",
+  // the horizontal wells: a length and a drainage box, plus ratios and fractions, which have no unit
+  h_len: "length", h_kvkh: null,
+  kg_lx: "length", kg_ly: "length", kg_xw: null, kg_yw: null, kg_zw: null,
+  kg_kykx: null, kg_top: null,
+  gh_len: "length", gh_kvkh: null,
+  gkg_lx: "length", gkg_ly: "length", gkg_xw: null, gkg_yw: null, gkg_zw: null,
+  gkg_kykx: null, gkg_top: null,
   bp_c: null,                      // handled on its own: see switchSystem
   bp_n: null,
   // fluid
@@ -170,16 +177,29 @@ function updateVisibility() {
   toggle("pvt-gas", !oil);
   toggle("grp-lift", oil);            // continuous gas lift is for oil wells
 
+  // Darcy and the two horizontal models all read the rock, so they share those boxes; what each
+  // one adds on top of them is its own block.  Kuchuk and Goode put the well in a box rather than
+  // in a circle, so it is the one model with no drainage radius.
   const oilModel = pick("oil_ipr");
+  const oilHoriz = oilModel === "horizontal" || oilModel === "horizontal_kg";
   toggle("f-pi", oilModel === "pi");
   toggle("f-vogel", oilModel === "vogel");
   toggle("f-fet", oilModel === "fetkovich");
-  toggle("f-darcy", oilModel === "darcy");
+  toggle("f-oilrock", oilModel === "darcy" || oilHoriz);
+  toggle("f-oilre", oilModel === "darcy" || oilModel === "horizontal");
+  toggle("f-horiz", oilHoriz);
+  toggle("f-hkg", oilModel === "horizontal_kg");
+  toggle("f-darcyv", oilModel === "darcy");
   toggle("f-transient", oilModel === "darcy" && pick("oil_regime") === "transient");
 
   const gasModel = pick("gas_ipr");
+  const gasHoriz = gasModel === "horizontal" || gasModel === "horizontal_kg";
   toggle("f-gasrock", gasModel !== "backpressure");
-  toggle("f-beta", gasModel === "jones");
+  toggle("f-gasre", gasModel === "darcy" || gasModel === "jones" || gasModel === "horizontal");
+  toggle("f-ghoriz", gasHoriz);
+  toggle("f-ghkg", gasModel === "horizontal_kg");
+  // turbulence is in every gas model but plain Darcy and the back-pressure curve
+  toggle("f-beta", gasModel === "jones" || gasHoriz);
   toggle("f-bp", gasModel === "backpressure");
 
   // the comparison tab: the test conditions follow the fluid, and the gas lift boxes are live only
@@ -370,6 +390,33 @@ function buildCase() {
                                                 ipr_inputs.q2, ipr_inputs.pwf2);
       extra.push({ key: "n from the two tests", value: n.toFixed(3) });
       extra.push({ key: "C from the two tests", value: C.toExponential(3) });
+    } else if (model === "horizontal" || model === "horizontal_kg") {
+      // The rock is read from the same boxes as the vertical Darcy model.  kv is given as a
+      // fraction of kh, which is how a geologist quotes it and how the Python asks for it.
+      const kh = eng("oil_k");
+      const common = { pb, kh, kv: kh * num("h_kvkh"), h: eng("oil_h"), length: eng("h_len"),
+                       rw: eng("oil_rw"), bo: eng("oil_bo"), mu: eng("oil_mu"),
+                       skin: eng("oil_skin") };
+      let J;
+      if (model === "horizontal") {
+        ipr_name = "oil_horizontal_joshi";
+        ipr_inputs = { ...common, re_h: eng("oil_re") };
+        J = ipr.horizontal_productivity_index_oil_joshi(
+          ipr_inputs.kh, ipr_inputs.kv, ipr_inputs.h, ipr_inputs.length, ipr_inputs.re_h,
+          ipr_inputs.rw, ipr_inputs.bo, ipr_inputs.mu, ipr_inputs.skin);
+      } else {
+        ipr_name = "oil_horizontal_kuchuk_goode";
+        ipr_inputs = { ...common, lx: eng("kg_lx"), ly: eng("kg_ly"),
+                       xw: num("kg_xw") * eng("kg_lx"), yw: num("kg_yw") * eng("kg_ly"),
+                       zw: num("kg_zw") * eng("oil_h"),
+                       ky_ratio: num("kg_kykx"), top: pick("kg_top") };
+        J = ipr.horizontal_productivity_index_oil_kuchuk_goode(
+          ipr_inputs.kh, ipr_inputs.kv, ipr_inputs.h, ipr_inputs.length, ipr_inputs.lx,
+          ipr_inputs.ly, ipr_inputs.xw, ipr_inputs.yw, ipr_inputs.zw, ipr_inputs.rw,
+          ipr_inputs.bo, ipr_inputs.mu, ipr_inputs.skin, ipr_inputs.ky_ratio, ipr_inputs.top);
+      }
+      extra.push({ key: `PI of the horizontal well (${units.unitOf("pi")})`,
+                   value: show(units.fromEngine("pi", J), 3) });
     } else {
       const regime = pick("oil_regime");
       ipr_name = "oil_darcy_regime";
@@ -443,6 +490,23 @@ function buildCase() {
     const estimated = ipr.gas_beta_firoozabadi_katz(common.k);
     extra.push({ key: `beta estimated (${units.unitOf("inverseLength")})`,
                  value: units.fromEngine("inverseLength", estimated).toExponential(3) });
+  }
+  if (model === "horizontal" || model === "horizontal_kg") {
+    // The reservoir flow has the same shape as for oil, so the oil geometry is reused in
+    // pressure-squared form; only the turbulence term is particular to gas.
+    const kh = common.k;
+    const geom = { temp_f: common.temp_f, kh, kv: kh * num("gh_kvkh"), h: common.h,
+                   length: eng("gh_len"), rw: common.rw, mu: common.mu, z: common.z,
+                   gas_sg, skin: common.skin, beta };
+    const horizontal = model === "horizontal"
+      ? { name: "gas_horizontal_joshi", inputs: { ...geom, re_h: common.re } }
+      : { name: "gas_horizontal_kuchuk_goode",
+          inputs: { ...geom, lx: eng("gkg_lx"), ly: eng("gkg_ly"),
+                    xw: num("gkg_xw") * eng("gkg_lx"), yw: num("gkg_yw") * eng("gkg_ly"),
+                    zw: num("gkg_zw") * common.h,
+                    ky_ratio: num("gkg_kykx"), top: pick("gkg_top") } };
+    return { ...base, fluid_type: "gas", fluid, ipr_name: horizontal.name,
+             ipr_inputs: horizontal.inputs, p_res, rateUnit: "gasRate", gas_lift: null };
   }
   return { ...base, fluid_type: "gas", fluid, ipr_name: "gas_jones",
            ipr_inputs: { ...common, gas_sg, beta, h_perf: null }, p_res,
@@ -1302,7 +1366,8 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
  * answer.  `scale` does that, reading the box named in `box`; `values` is for the few inputs where
  * fixed numbers are the sensible thing (water cut, tubing sizes).
  * @type {{path: string, label: string, quantity: import("./units.js").Quantity | null,
- *         oil?: boolean, gas?: boolean, box?: string, scale?: number[], values?: number[]}[]}
+ *         oil?: boolean, gas?: boolean, lift?: boolean, box?: string, scale?: number[],
+ *         values?: number[]}[]}
  */
 const SENSITIVITY_CHOICES = [
   { path: "p_wh", label: "Wellhead flowing pressure", quantity: "pressure",
@@ -1321,20 +1386,48 @@ const SENSITIVITY_CHOICES = [
     box: "bp_c", scale: [0.5, 1.0, 1.5, 2.0] },
   { path: "ipr_inputs.k", label: "Permeability", quantity: "permeability",
     box: "", scale: [0.2, 1.0, 2.0, 5.0] },
+  // the horizontal models call their permeability kh, so it is a different place in the inputs
+  { path: "ipr_inputs.kh", label: "Horizontal permeability kh", quantity: "permeability",
+    box: "", scale: [0.2, 1.0, 2.0, 5.0] },
+  // kept under twice the length typed in: a horizontal well cannot be longer than the area it
+  // drains, and the model says so rather than returning a number
+  { path: "ipr_inputs.length", label: "Horizontal well length", quantity: "length",
+    box: "", scale: [0.5, 0.75, 1.0, 1.25] },
+  // Skin is the one number on this page an engineer can actually change - it is what a stimulation
+  // job buys - so it is worth asking what a clean-up or a frac would be worth before paying for it.
+  // The spread is fixed rather than scaled: a skin of 0 has no multiples.
+  { path: "ipr_inputs.skin", label: "Skin", quantity: null, values: [-3, 0, 5, 10, 20] },
+  // Gas lift lives on the fluid, not in the IPR: the injected gas lightens the column above the
+  // injection point, so both how much and how deep change the VLP and nothing else.
+  { path: "fluid.injection_gas_rate", label: "Lift gas rate", quantity: "gasRate", oil: true,
+    lift: true, box: "gl_rate", scale: [0, 0.5, 1.0, 1.5, 2.0] },
+  { path: "fluid.injection_md", label: "Lift gas injection depth, MD", quantity: "length",
+    oil: true, lift: true, box: "gl_md", scale: [0.6, 0.8, 1.0, 1.15] },
 ];
 
 /** Fill the sensitivity drop-down with what suits this case. */
 function fillSensitivityChoices() {
   const box = /** @type {HTMLSelectElement} */ (el("sens_name"));
   const isOil = pick("fluid_type") === "oil";
+  const model = isOil ? pick("oil_ipr") : pick("gas_ipr");
+  const horizontal = model === "horizontal" || model === "horizontal_kg";
+  // Darcy, Jones and the horizontal models all read the rock, so all of them have a skin; the
+  // ones that fit a curve to a well test - PI, Vogel, Fetkovich, back pressure - have the skin
+  // already buried in the test, and there is nothing to vary.
+  const hasSkin = horizontal || (isOil ? model === "darcy" : model !== "backpressure");
+  const onLift = isOil && pick("lift") === "continuous";
   /** @type {typeof SENSITIVITY_CHOICES} */
   const wanted = SENSITIVITY_CHOICES.filter((o) => {
     if (o.oil && !isOil) return false;
     if (o.gas && isOil) return false;
-    if (o.path === "ipr_inputs.J" && pick("oil_ipr") !== "pi") return false;
-    if (o.path === "ipr_inputs.C" && pick("gas_ipr") !== "backpressure") return false;
+    if (o.lift && !onLift) return false;
+    if (o.path === "ipr_inputs.J" && model !== "pi") return false;
+    if (o.path === "ipr_inputs.C" && model !== "backpressure") return false;
+    if (o.path === "ipr_inputs.skin") return hasSkin;
+    if (o.path === "ipr_inputs.length") return horizontal;
+    if (o.path === "ipr_inputs.kh") return horizontal;
     if (o.path === "ipr_inputs.k") {
-      return isOil ? pick("oil_ipr") === "darcy" : pick("gas_ipr") !== "backpressure";
+      return horizontal ? false : isOil ? model === "darcy" : model !== "backpressure";
     }
     return true;
   });
@@ -1359,7 +1452,10 @@ function fillSensitivityValues() {
   /** @type {number[]} */
   let values;
   if (choice.scale) {
-    const box = choice.box || (pick("fluid_type") === "oil" ? "oil_k" : "gas_k");
+    const oil = pick("fluid_type") === "oil";
+    const box = choice.box
+      || (choice.path === "ipr_inputs.length" ? (oil ? "h_len" : "gh_len")
+        : oil ? "oil_k" : "gas_k");
     const now = num(box) || 1;
     values = choice.scale.map((f) => roundNicely(f * now));
   } else {
@@ -1416,12 +1512,27 @@ function sensitivityNow() {
                  max_step_ft: c.max_step_ft, n_grid: 20,
                  gravity_mult: c.gravity_mult, friction_mult: c.friction_mult };
 
-  // the tubing size is not one number inside the inputs: each value is a whole new well
-  const rows = path === "tubing_id"
-    ? nodal.sensitivity(base, "well", engineValues.map((d) => nodal.well_with_tubing_id(c.well, d)),
-                        true, NODAL_POINTS)
-    : nodal.sensitivity(base, path, engineValues, true, NODAL_POINTS);
-  rows.forEach((row, i) => { row.value = typed[i]; });
+  // One value at a time, so that one the model refuses outright - a horizontal well longer than
+  // the area it drains, say - says so in its own row instead of throwing the whole sweep away.
+  // The tubing size is not one number inside the inputs: each value there is a whole new well.
+  /** @type {Record<string, any>[]} */
+  const rows = [];
+  /** @type {string[]} */
+  const refused = [];
+  engineValues.forEach((value, i) => {
+    try {
+      const [row] = path === "tubing_id"
+        ? nodal.sensitivity(base, "well", [nodal.well_with_tubing_id(c.well, value)], true, NODAL_POINTS)
+        : nodal.sensitivity(base, path, [value], true, NODAL_POINTS);
+      row.value = typed[i];
+      rows.push(row);
+    } catch (error) {
+      const why = /** @type {Error} */ (error).message;
+      if (!refused.includes(why)) refused.push(why);
+      rows.push({ value: typed[i], found: false, q: 0, pwf: 0, curves: null, refused: true });
+    }
+  });
+  if (refused.length === rows.length) throw new Error(refused.join(" "));
 
   const rateLabel = units.unitOf(c.rateUnit);
   const pressureLabel = units.unitOf("pressure");
@@ -1464,10 +1575,10 @@ function sensitivityNow() {
     table.innerHTML = `<tr><th>${head}</th><th>Rate (${rateLabel})</th>`
       + `<th>Pwf (${pressureLabel})</th></tr>`
       + rows.map((r) => `<tr><td>${r.value}</td>`
-          + `<td>${r.found ? show(toRate(r.q), 0) : "no flow"}</td>`
+          + `<td>${r.found ? show(toRate(r.q), 0) : r.refused ? "not possible" : "no flow"}</td>`
           + `<td>${r.found ? show(toP(r.pwf), 0) : ""}</td></tr>`).join("");
   }
-  message("sens-messages", "");
+  message("sens-messages", refused.join(" "), refused.length ? "warn" : "");
 }
 
 // ---------------------------------------------------------------------
@@ -2084,6 +2195,8 @@ for (const id of ALL_IDS) {
 el("fluid_type").addEventListener("change", fillSensitivityChoices);
 el("oil_ipr").addEventListener("change", fillSensitivityChoices);
 el("gas_ipr").addEventListener("change", fillSensitivityChoices);
+// turning the gas lift on and off adds and removes two of the choices
+el("lift").addEventListener("change", fillSensitivityChoices);
 el("sens_name").addEventListener("change", fillSensitivityValues);
 el("unit_system").addEventListener("change", (event) => {
   switchSystem(/** @type {HTMLSelectElement} */ (event.target).value);
