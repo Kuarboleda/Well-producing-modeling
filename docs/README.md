@@ -18,10 +18,27 @@ correlations, the operating point where they cross, the pressure and temperature
 well, continuous gas lift, sensitivities on one input at a time, the correlation chosen for the well
 from its own inputs with the reason given, the correlations compared against a measured downhole
 gauge reading or flowing gradient survey, and matching the chosen one to that data - in oilfield or
-metric units. Horizontal wells are on the screen for both oil and gas, by Joshi and by Kuchuk and
-Goode. Still to come: the gas lift valve design, PVT matching to laboratory data, multilayer
-(commingled) inflow on the screen - the engine behind it is already translated, but it needs a
-layer table to drive it - and the survey table as a table rather than pasted text.
+metric units. Every inflow model the engine carries is on the screen: PI, Vogel, Darcy in its
+three regimes, Fetkovich, both horizontal models (Joshi, and Kuchuk and Goode) and commingled
+layers, for oil and for gas. Still to come: the gas lift valve design, PVT matching to laboratory
+data, and the survey and layer tables as tables rather than pasted text.
+
+**Commingled layers.** One layer per line in a text box, the way the survey is entered. An oil
+line is the layer's pressure, its productivity index, its water cut and its GOR; a gas line names
+its own model first (`jones`, `darcy` or `backpressure`) because a layer described by the rock it
+sits in and a layer described by a curve fitted to a test take different numbers. Leave the
+produced-fluid columns off a line and it falls back to the Fluid (PVT) panel. Every gas layer gets
+its own Z, viscosity and well-stream gravity, worked out from its own pressure and its own CGR: a
+deeper, richer layer is a different gas from the one above it. The layers bring their own
+pressures, so the Pr box at the top of the panel is greyed out and the curve starts at the highest
+layer. What the well produces is then the mixture at the rate it settled at - which is not what
+the PVT panel says - so the rates across the top, and the fluid moving in the drawing, are taken
+from that mixture.
+
+**The sensitivity chart** draws two rates against whatever is being varied: the total the well
+makes and the part of it that is saleable - liquid and oil, or gas and condensate - each in the
+colour that rate is written in across the top of the page. The total on its own hides what matters
+for anything that moves the water cut: the liquid can hold up while the oil falls away under it.
 
 **What can be varied, one at a time:** wellhead pressure, reservoir pressure, tubing size, water
 cut, producing GOR, and whichever of the inflow model's own numbers it actually has - the

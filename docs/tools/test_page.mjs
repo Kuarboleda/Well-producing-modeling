@@ -210,7 +210,20 @@ const sensRows = await page.$$eval("#sens-table tr", (rs) => rs.length);
 check("the sensitivity table has a row per value", sensRows === 5, `${sensRows} rows incl. header`);
 check("the sensitivity curves are drawn", (await traceCount("chart-sens-curves")) >= 8,
       `${await traceCount("chart-sens-curves")} traces`);
-check("the operating-point line is drawn", (await traceCount("chart-sens")) === 1);
+// Two lines, not one: the total the well makes and the part of it that is saleable.  For anything
+// that moves the water cut the two go different ways, and the total on its own hides that.
+const sensPlot = await plotOf("chart-sens");
+check("the operating point is drawn as a liquid rate and an oil rate",
+      sensPlot.traces.length === 2
+      && sensPlot.traces[0].name.startsWith("Liquid rate")
+      && sensPlot.traces[1].name.startsWith("Oil rate"),
+      sensPlot.traces.map((/** @type {any} */ x) => x.name).join(" | "));
+check("and each is the colour its rate is written in at the top of the page",
+      sensPlot.traces[0].line.color === "#0f766e" && sensPlot.traces[1].line.color === "#15803d",
+      sensPlot.traces.map((/** @type {any} */ x) => x.line.color).join(" "));
+check("the oil line sits under the liquid line, because some of it is water",
+      sensPlot.traces[1].y.every((/** @type {number} */ v, /** @type {number} */ i) =>
+        v < sensPlot.traces[0].y[i]));
 const sensRates = await page.$$eval("#sens-table tr td:nth-child(2)", (ts) => ts.map((t) => t.textContent));
 const flowed = sensRates.map((t) => Number(t.replace(/,/g, ""))).filter((v) => Number.isFinite(v));
 check("every value flows at these starting values", flowed.length === 4, sensRates.join(" | "));
@@ -556,6 +569,31 @@ for (const [fluid, model, label] of [
         choices.includes("ipr_inputs.skin") && choices.includes("ipr_inputs.length"),
         choices.join(" "));
 }
+// ---- 12c. the commingled layers ----
+// Each layer brings its own pressure and its own fluid, so what the well produces is a mixture
+// that the PVT panel knows nothing about, and the page has to report THAT rather than the panel.
+for (const [fluid, select] of [["oil", "oil_ipr"], ["gas", "gas_ipr"]]) {
+  await setVal("fluid_type", fluid);
+  await setVal(select, "multilayer");
+  await calcAgain();
+  const pairs = await results();
+  const total = numberFrom(pairs, fluid === "oil" ? "Liquid rate (" : "Gas rate (");
+  const sale = numberFrom(pairs, fluid === "oil" ? "Oil rate (" : "Condensate rate (");
+  const layers = numberFrom(pairs, "Layers");
+  check(`${fluid} multilayer gives a rate`, Number.isFinite(total) && total > 0,
+        `${total} - ${await noteText()}`);
+  check(`${fluid} multilayer reads all three layers`, layers === 3, String(layers));
+  // the default tables all have layers that make their own water and condensate
+  check(`${fluid} multilayer reports the mixture the layers make, not the PVT panel`,
+        Number.isFinite(sale) && sale > 0 && sale < total, `${sale} of ${total}`);
+  check(`${fluid} multilayer takes its pressure from the strongest layer`,
+        await page.$eval("#p_res", (n) => n.disabled));
+}
+await setVal("fluid_type", "oil");
+await setVal("oil_ipr", "pi");
+check("and the pressure box comes back for a single-layer model",
+      !(await page.$eval("#p_res", (n) => n.disabled)));
+
 // a model fitted to a well test has its skin already buried in the test, so there is none to vary
 await setVal("fluid_type", "oil");
 await setVal("oil_ipr", "pi");

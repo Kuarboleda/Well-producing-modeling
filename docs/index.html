@@ -286,7 +286,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 23 Nov 2026 06:02 (local)</span>
+  <span class="sub build" id="build">build 23 Nov 2026 06:56 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -313,6 +313,8 @@
             <option value="gas">Gas producer</option>
           </select>
         </label>
+        <p class="hint" id="p_res-note">Each layer below carries its own pressure, so this box is not
+          used; the curve starts at the highest of them.</p>
         <div class="row">
           <label title="Static reservoir pressure">Pr <span class="u" data-unit="pressure"></span>
             <input type="number" id="p_res" value="3000" step="50" min="1">
@@ -332,8 +334,25 @@
               <option value="fetkovich">Fetkovich (two flowing tests)</option>
               <option value="horizontal">Horizontal well (Joshi)</option>
               <option value="horizontal_kg">Horizontal well (Kuchuk and Goode)</option>
+              <option value="multilayer">Multilayer (commingled)</option>
             </select>
           </label>
+
+          <div id="f-multi">
+            <label>Layers: pressure, productivity index, water cut, GOR - one layer per line
+              <textarea id="oil_layers" rows="4">3200 2.0 0.10 600
+3000 1.2 0.45 500
+2800 0.6 0.80 400</textarea>
+            </label>
+            <p class="hint">Four numbers per line, separated by a space, tab, comma or semicolon:
+              the layer's own pressure, its productivity index, its water cut as a fraction, and its
+              GOR. Leave the water cut and the GOR off a line to use the ones under Fluid (PVT).
+              The layers share one bubble point and one depth, and the curve starts at the highest
+              layer pressure, which replaces the reservoir pressure above.</p>
+            <label class="check" title="A layer below the flowing pressure takes fluid from the wellbore instead of being shut in">
+              <input type="checkbox" id="oil_crossflow"> Allow crossflow into the weaker layers
+            </label>
+          </div>
 
           <label id="f-pi">Productivity index <span class="u" data-unit="pi"></span>
             <input type="number" id="pi" value="3" step="0.1" min="0.0001">
@@ -476,8 +495,26 @@
               <option value="backpressure">Back pressure (C and n)</option>
               <option value="horizontal">Horizontal well (Joshi)</option>
               <option value="horizontal_kg">Horizontal well (Kuchuk and Goode)</option>
+              <option value="multilayer">Multilayer (commingled)</option>
             </select>
           </label>
+
+          <div id="f-gmulti">
+            <label>Layers: model, pressure, then its own numbers - one layer per line
+              <textarea id="gas_layers" rows="4">jones 3500 5 40 0 10 2
+jones 3300 2 25 3 8 3
+backpressure 3100 0.012 0.85 5 2</textarea>
+            </label>
+            <p class="hint">A <b>jones</b> or <b>darcy</b> line is: model, layer pressure,
+              permeability, height, skin, CGR, WGR. A <b>backpressure</b> line is: model, layer
+              pressure, C, n, CGR, WGR. Leave the CGR and WGR off a line to use the ones under
+              Fluid (PVT). The drainage radius, wellbore radius and beta above are shared by every
+              layer; Z and the viscosity are taken at 75 % of each layer's own pressure. The curve
+              starts at the highest layer pressure, which replaces the reservoir pressure above.</p>
+            <label class="check" title="A layer below the flowing pressure takes gas from the wellbore instead of being shut in">
+              <input type="checkbox" id="gas_crossflow"> Allow crossflow into the weaker layers
+            </label>
+          </div>
 
           <div id="f-gasrock">
             <div class="row">

@@ -21,6 +21,10 @@ import * as advice from "./advice.js";
 import * as wellview from "./wellview.js";
 
 // One place for the chart colours, so a pressure line is the same colour wherever it is drawn.
+// The colours the rates are written in across the top of the page, so a rate drawn on a chart is
+// the colour the reader has already learned it by.  They are the same values as the .kpis rules in
+// index.html; both places need them, and there is no stylesheet a chart library can read.
+const PHASE_TEXT = { liquid: "#0f766e", oil: "#15803d", water: "#1d4ed8", gas: "#b91c1c" };
 const IPR_COLOUR = "#1f77b4";     // the inflow curve
 const PROFILE_P = "#111827";      // the pressure down the well: black, so it is not the IPR
 const VLP_COLOUR = "#d62728";     // the tubing curve
@@ -101,6 +105,8 @@ const QUANTITY_OF = {
   gh_len: "length", gh_kvkh: null,
   gkg_lx: "length", gkg_ly: "length", gkg_xw: null, gkg_yw: null, gkg_zw: null,
   gkg_kykx: null, gkg_top: null,
+  // the layer tables carry their own units inside the text, so there is nothing to convert here
+  oil_layers: null, oil_crossflow: null, gas_layers: null, gas_crossflow: null,
   bp_c: null,                      // handled on its own: see switchSystem
   bp_n: null,
   // fluid
@@ -185,6 +191,7 @@ function updateVisibility() {
   toggle("f-pi", oilModel === "pi");
   toggle("f-vogel", oilModel === "vogel");
   toggle("f-fet", oilModel === "fetkovich");
+  toggle("f-multi", oilModel === "multilayer");
   toggle("f-oilrock", oilModel === "darcy" || oilHoriz);
   toggle("f-oilre", oilModel === "darcy" || oilModel === "horizontal");
   toggle("f-horiz", oilHoriz);
@@ -194,13 +201,19 @@ function updateVisibility() {
 
   const gasModel = pick("gas_ipr");
   const gasHoriz = gasModel === "horizontal" || gasModel === "horizontal_kg";
-  toggle("f-gasrock", gasModel !== "backpressure");
+  toggle("f-gmulti", gasModel === "multilayer");
+  toggle("f-gasrock", gasModel !== "backpressure" && gasModel !== "multilayer");
   toggle("f-gasre", gasModel === "darcy" || gasModel === "jones" || gasModel === "horizontal");
   toggle("f-ghoriz", gasHoriz);
   toggle("f-ghkg", gasModel === "horizontal_kg");
   // turbulence is in every gas model but plain Darcy and the back-pressure curve
   toggle("f-beta", gasModel === "jones" || gasHoriz);
   toggle("f-bp", gasModel === "backpressure");
+  // the layers bring their own pressure, so the one at the top of the panel is not used
+  const multilayer = (oil ? oilModel : gasModel) === "multilayer";
+  const pres = document.getElementById("p_res");
+  if (pres) /** @type {HTMLInputElement} */ (pres).disabled = multilayer;
+  toggle("p_res-note", multilayer);
 
   // the comparison tab: the test conditions follow the fluid, and the gas lift boxes are live only
   // when the well is actually on continuous gas lift
@@ -302,6 +315,7 @@ function switchSystem(name) {
  * @typedef {{fluid_type: string, well: import("./well.js").Well,
  *            fluid: vlp.OilWaterFluid | vlp.GasFluid, ipr_name: string,
  *            ipr_inputs: Record<string, any>, p_res: number, p_wh: number, correlation: string,
+ *            mix?: Record<string, number>,
  *            max_step_ft: number, gravity_mult: number, friction_mult: number,
  *            rateUnit: "liquidRate"|"gasRate", perf_md: number,
  *            gas_lift: {rate: number, md: number, sg: number, p_inj: number} | null,
@@ -315,7 +329,8 @@ function switchSystem(name) {
  */
 function buildCase() {
   const isOil = pick("fluid_type") === "oil";
-  const p_res = eng("p_res");
+  // not const: a multilayer well takes its pressure from the strongest layer instead of this box
+  let p_res = eng("p_res");
   const t_res = eng("t_res");
   /** @type {{key: string, value: string}[]} */
   const extra = [];
@@ -390,6 +405,19 @@ function buildCase() {
                                                 ipr_inputs.q2, ipr_inputs.pwf2);
       extra.push({ key: "n from the two tests", value: n.toFixed(3) });
       extra.push({ key: "C from the two tests", value: C.toExponential(3) });
+    } else if (model === "multilayer") {
+      // The layers bring their own pressures, so the box at the top of the panel is not used: the
+      // curve has to start at the highest layer, or the strongest layer would be cut off.
+      ipr_name = "oil_multilayer";
+      const layers = oilLayers(num("water_cut") / 100.0,
+                               num("oil_gor") > 0 ? eng("oil_gor") : null);
+      ipr_inputs = { pb, layers, crossflow: ticked("oil_crossflow") };
+      p_res = Math.max(...layers.map((layer) => layer.p_res));
+      extra.push({ key: "Layers", value: String(layers.length) });
+      extra.push({ key: `Highest layer pressure (${units.unitOf("pressure")})`,
+                   value: show(units.fromEngine("pressure", p_res), 0) });
+      extra.push({ key: `Layers added up (${units.unitOf("pi")})`,
+                   value: show(units.fromEngine("pi", layers.reduce((s, l) => s + l.J, 0)), 2) });
     } else if (model === "horizontal" || model === "horizontal_kg") {
       // The rock is read from the same boxes as the vertical Darcy model.  kv is given as a
       // fraction of kh, which is how a geologist quotes it and how the Python asks for it.
@@ -473,6 +501,22 @@ function buildCase() {
     return { ...base, fluid_type: "gas", fluid, ipr_name: "gas_backpressure",
              ipr_inputs: { C, n }, p_res, rateUnit: "gasRate", gas_lift: null };
   }
+  if (model === "multilayer") {
+    // Every layer gets its own Z, viscosity and gas gravity, worked out in gasLayers from its own
+    // pressure and its own CGR, so there is nothing shared to evaluate here but the geometry.
+    const layers = gasLayers({
+      temp_f: t_res, re: eng("gas_re"), rw: eng("gas_rw"),
+      beta: num("gas_beta") > 0 ? eng("gas_beta") : null,
+      cgr, wgr, dry_sg, cond_api: num("cond_api"), y_h2s, y_co2, visc: pick("gas_visc") });
+    p_res = Math.max(...layers.map((layer) => layer.p_res));
+    extra.push({ key: "Layers", value: String(layers.length) });
+    extra.push({ key: `Highest layer pressure (${units.unitOf("pressure")})`,
+                 value: show(units.fromEngine("pressure", p_res), 0) });
+    return { ...base, fluid_type: "gas", fluid, ipr_name: "gas_multilayer",
+             ipr_inputs: { layers, crossflow: ticked("gas_crossflow") }, p_res,
+             rateUnit: "gasRate", gas_lift: null };
+  }
+
   // Darcy and Jones need Z and viscosity.  Exactly as the Python does it, they are evaluated at 75 %
   // of the reservoir pressure (a typical average of Pr and Pwf) and the reservoir temperature.
   const props = pvt.gasProperties(0.75 * p_res, t_res, gas_sg, y_h2s, y_co2, pick("gas_visc"));
@@ -511,6 +555,103 @@ function buildCase() {
   return { ...base, fluid_type: "gas", fluid, ipr_name: "gas_jones",
            ipr_inputs: { ...common, gas_sg, beta, h_perf: null }, p_res,
            rateUnit: "gasRate", gas_lift: null };
+}
+
+/**
+ * Split one line of a layer table into its words.  Blank lines and anything beginning with a hash
+ * are skipped, and a comma, semicolon or tab separates as well as a space, so a column pasted out
+ * of a spreadsheet works unchanged.
+ * @param {string} text @returns {string[][]}
+ */
+function layerLines(text) {
+  /** @type {string[][]} */
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const bare = line.split("#")[0];
+    const parts = bare.replace(/[,;]/g, " ").split(/\s+/).filter((s) => s.length > 0);
+    if (parts.length) out.push(parts);
+  }
+  return out;
+}
+
+/**
+ * The oil layer table: the layer's own pressure, its productivity index, and - if the line gives
+ * them - its own water cut and GOR.  A line without them falls back to the PVT panel.
+ * @param {number} wc @param {number|null} gor
+ * @returns {import("./ipr.js").OilLayer[]}
+ */
+function oilLayers(wc, gor) {
+  const rows = layerLines(/** @type {HTMLTextAreaElement} */ (el("oil_layers")).value);
+  /** @type {import("./ipr.js").OilLayer[]} */
+  const layers = [];
+  rows.forEach((parts, i) => {
+    const n = parts.map(Number);
+    if (!(n.length >= 2 && n.every((v) => Number.isFinite(v)))) {
+      if (i === 0) return;                            // a header line, which is not an error
+      throw new Error(`Layer ${layers.length + 1}: need at least a pressure and a productivity `
+        + `index on each line. Read "${parts.join(" ")}".`);
+    }
+    layers.push({ p_res: units.toEngine("pressure", n[0]), J: units.toEngine("pi", n[1]),
+                  wc: n.length > 2 ? n[2] : wc,
+                  gor: n.length > 3 ? units.toEngine("gor", n[3]) : gor });
+  });
+  if (layers.length < 1) {
+    throw new Error("Give at least one layer: a pressure and a productivity index.");
+  }
+  return layers;
+}
+
+/**
+ * The gas layer table.  Each line names its own model first, because a Jones or Darcy layer is
+ * described by the rock it sits in and a back-pressure layer by a curve fitted to a test, and the
+ * two take different numbers.  The deliverability coefficients a and b are worked out here, each
+ * from its own layer's pressure, so every layer gets its own Z and viscosity.
+ * @param {{temp_f: number, re: number, rw: number, beta: number|null, cgr: number, wgr: number,
+ *          dry_sg: number, cond_api: number, y_h2s: number, y_co2: number, visc: string}} shared
+ * @returns {import("./ipr.js").GasLayer[]}
+ */
+function gasLayers(shared) {
+  const rows = layerLines(/** @type {HTMLTextAreaElement} */ (el("gas_layers")).value);
+  /** @type {import("./ipr.js").GasLayer[]} */
+  const layers = [];
+  for (const parts of rows) {
+    const kind = parts[0].toLowerCase();
+    if (!["jones", "darcy", "backpressure", "back_pressure"].includes(kind)) continue;
+    const n = parts.slice(1).map(Number);
+    const k = layers.length + 1;
+    const bp = kind.startsWith("back");
+    const want = bp ? 3 : 4;
+    if (!(n.length >= want && n.slice(0, want).every((v) => Number.isFinite(v)))) {
+      throw new Error(`Layer ${k} (${kind}): expected ${want} numbers after the model name, `
+        + `read "${parts.slice(1).join(" ")}".`);
+    }
+    const p_layer = units.toEngine("pressure", n[0]);
+    const cgr = n.length > want ? n[want] : shared.cgr;
+    const wgr = n.length > want + 1 ? n[want + 1] : shared.wgr;
+    if (bp) {
+      const nExp = n[2];
+      layers.push({ p_res: p_layer, cgr, wgr,
+                    C: units.convertBackpressureC(n[1], nExp, units.system(), "field"), n: nExp });
+      continue;
+    }
+    // Z and the viscosity at 75 % of THIS layer's pressure, with the gas this layer makes: a
+    // deeper, richer layer is a different gas from the one above it.
+    const sg = cgr > 0 ? pvt.wetGasGravity(shared.dry_sg, cgr, shared.cond_api) : shared.dry_sg;
+    const props = pvt.gasProperties(0.75 * p_layer, shared.temp_f, sg,
+                                    shared.y_h2s, shared.y_co2, shared.visc);
+    const kLayer = units.toEngine("permeability", n[1]);
+    const hLayer = units.toEngine("length", n[2]);
+    const a = ipr.gas_a_coefficient(shared.temp_f, kLayer, hLayer, props.mu_g, props.z,
+                                    shared.re, shared.rw, n[3]);
+    const b = kind === "darcy"
+      ? 0.0
+      : ipr.gas_b_coefficient(shared.temp_f, kLayer, hLayer, props.z, sg, shared.rw, shared.beta);
+    layers.push({ p_res: p_layer, a, b, cgr, wgr });
+  }
+  if (layers.length < 1) {
+    throw new Error("Give at least one layer, each line starting with jones, darcy or backpressure.");
+  }
+  return layers;
 }
 
 /**
@@ -654,7 +795,8 @@ function rateName(c) {
  * Before Calculate the labels are there and the values are dashes, so the strip is not a surprise
  * that appears later.  The gas is the FORMATION gas; lift gas is injected, not produced, and the
  * line under the drawing says how much of it is going in.
- * @param {Case} c @param {{q: number, pwf: number} | null} res
+ * @param {Case} c
+ * @param {{q: number, pwf: number, mix?: Record<string, number>} | null} res
  */
 function kpiItems(c, res) {
   const liquid = units.unitOf("liquidRate");
@@ -663,24 +805,30 @@ function kpiItems(c, res) {
   const q = res ? res.q : 0;
   /** @param {number} x @param {import("./units.js").Quantity} quantity */
   const v = (x, quantity) => (res ? show(units.fromEngine(quantity, x), 0) : "—");
+  // Commingled layers each make their own fluid, so what the well produces is the mixture at the
+  // rate it settled at, not what the PVT panel says.  solve_well hands that back in `mix`.
+  const mix = res && res.mix ? res.mix : null;
   if (c.fluid_type === "oil") {
     const f = /** @type {vlp.OilWaterFluid} */ (c.fluid);
-    const oil = q * (1 - f.water_cut);
+    const wc = mix && Number.isFinite(mix.water_cut) ? mix.water_cut : f.water_cut;
+    const gor = mix && Number.isFinite(mix.gor) ? mix.gor : f.producingGor();
+    const oil = q * (1 - wc);
     return [
       { key: `Liquid rate (${liquid})`, value: v(q, "liquidRate"), phase: "liquid" },
       { key: `Oil rate (${liquid})`, value: v(oil, "liquidRate"), phase: "oil" },
-      { key: `Water rate (${liquid})`, value: v(q * f.water_cut, "liquidRate"), phase: "water" },
-      { key: `Gas rate (${gas})`, value: v(oil * f.producingGor() / 1000, "gasRate"),
-        phase: "gas" },
+      { key: `Water rate (${liquid})`, value: v(q * wc, "liquidRate"), phase: "water" },
+      { key: `Gas rate (${gas})`, value: v(oil * gor / 1000, "gasRate"), phase: "gas" },
       { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
     ];
   }
   const f = /** @type {vlp.GasFluid} */ (c.fluid);
+  const cgr = mix && Number.isFinite(mix.cgr) ? mix.cgr : f.cgr;
+  const wgr = mix && Number.isFinite(mix.wgr) ? mix.wgr : f.wgr;
   return [
-    { key: `Liquid rate (${liquid})`, value: v(q * (f.cgr + f.wgr) / 1000, "liquidRate"),
+    { key: `Liquid rate (${liquid})`, value: v(q * (cgr + wgr) / 1000, "liquidRate"),
       phase: "liquid" },
-    { key: `Condensate rate (${liquid})`, value: v(q * f.cgr / 1000, "liquidRate"), phase: "oil" },
-    { key: `Water rate (${liquid})`, value: v(q * f.wgr / 1000, "liquidRate"), phase: "water" },
+    { key: `Condensate rate (${liquid})`, value: v(q * cgr / 1000, "liquidRate"), phase: "oil" },
+    { key: `Water rate (${liquid})`, value: v(q * wgr / 1000, "liquidRate"), phase: "water" },
     { key: `Gas rate (${gas})`, value: v(q, "gasRate"), phase: "gas" },
     { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
   ];
@@ -949,7 +1097,7 @@ function runNodal() {
   }
   drawExtras(c.extra);
   drawKpis(kpiItems(c, res.found
-    ? { q: /** @type {number} */ (res.q), pwf: /** @type {number} */ (res.pwf) }
+    ? { q: /** @type {number} */ (res.q), pwf: /** @type {number} */ (res.pwf), mix: res.mix }
     : null), !res.found);
 
   const allQ = [...cv.ipr_q.map(toRate), ...cv.vlp_q.map(toRate)];
@@ -995,6 +1143,9 @@ function runNodal() {
       borrowed = false;
     }
   }
+  // what the commingled layers actually produce at this rate, so the drawing shows that mixture
+  // rather than the one typed into the PVT panel
+  c.mix = res.mix;
   drawWell(c, patternTr, /** @type {number} */ (res.q), patternFrom, borrowed);
   const drawdown = show(units.fromEngine("pressureDiff",
                                          c.p_res - /** @type {number} */ (res.pwf)), 0);
@@ -1287,8 +1438,9 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     md: c.well.md, tvd: c.well.tvd, tubing_id: num("tubing_id"),
     perf_top, packer_md, shoe_md,
     gl_md: c.gas_lift ? c.gas_lift.md : null,
-    water_cut: isOil ? oil.water_cut : 0.35,
-    gor: isOil ? oil.producingGor() : 6000,
+    water_cut: isOil ? (c.mix && Number.isFinite(c.mix.water_cut) ? c.mix.water_cut
+                                                                   : oil.water_cut) : 0.35,
+    gor: isOil ? (c.mix && Number.isFinite(c.mix.gor) ? c.mix.gor : oil.producingGor()) : 6000,
     flowing: rate > 0,
     speed,
     lengthUnit: units.unitOf("length"),
@@ -1560,14 +1712,53 @@ function sensitivityNow() {
   plot("chart-sens-curves", curveTraces,
        layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`));
 
-  // the operating rate against the varied input
+  // What the well makes, against what was varied.  Two lines, because the total is not the thing
+  // being sold: the oil is, and for anything that moves the water cut - the water cut itself, or a
+  // layer coming on - the two go different ways.  Each is the colour it is written in up at the
+  // top of the page.  A commingled well's water cut changes from run to run, which is why it is
+  // taken off each row rather than off the fluid.
   const found = rows.filter((r) => r.found);
-  plot("chart-sens", [{
+  const oilWell = c.fluid_type === "oil";
+  const baseWc = oilWell ? /** @type {vlp.OilWaterFluid} */ (c.fluid).water_cut : 0;
+  const baseCgr = oilWell ? 0 : /** @type {vlp.GasFluid} */ (c.fluid).cgr;
+  const saleable = found.map((r) => {
+    if (oilWell) {
+      // the row's own mixture if the layers made one, else the value being swept if the sweep IS
+      // the water cut, else what the PVT panel says
+      const wc = Number.isFinite(r.water_cut) ? r.water_cut
+        : path === "fluid.water_cut" ? engineValues[rows.indexOf(r)]
+          : baseWc;
+      return units.fromEngine("liquidRate", r.q * (1 - wc));
+    }
+    return units.fromEngine("liquidRate", r.q * baseCgr / 1000);
+  });
+  const rateTraces = [{
     x: found.map((r) => r.value), y: found.map((r) => toRate(r.q)),
-    mode: "lines+markers", name: `Rate (${rateLabel})`,
-    line: { color: IPR_COLOUR, width: 2.5 }, marker: { size: 8 },
-  }], layoutFor(choice.quantity ? `${choice.label} (${units.unitOf(choice.quantity)})` : choice.label,
-                `Operating rate (${rateLabel})`));
+    mode: "lines+markers", name: oilWell ? `Liquid rate (${rateLabel})` : `Gas rate (${rateLabel})`,
+    line: { color: oilWell ? PHASE_TEXT.liquid : PHASE_TEXT.gas, width: 2.5 }, marker: { size: 8 },
+  }];
+  // A gas well's condensate is a liquid rate, which does not belong on a gas axis, so it gets one
+  // of its own on the right; for an oil well both lines are the same kind of barrel.
+  if (saleable.some((v) => v > 0)) {
+    rateTraces.push(/** @type {any} */ ({
+      x: found.map((r) => r.value), y: saleable, mode: "lines+markers",
+      name: oilWell ? `Oil rate (${rateLabel})`
+                    : `Condensate rate (${units.unitOf("liquidRate")})`,
+      line: { color: PHASE_TEXT.oil, width: 2.5, dash: oilWell ? "solid" : "dot" },
+      marker: { size: 8 }, ...(oilWell ? {} : { yaxis: "y2" }),
+    }));
+  }
+  const sensLayout = /** @type {any} */ (layoutFor(
+    choice.quantity ? `${choice.label} (${units.unitOf(choice.quantity)})` : choice.label,
+    oilWell ? `Rate (${rateLabel})` : `Gas rate (${rateLabel})`));
+  if (!oilWell && rateTraces.length > 1) {
+    sensLayout.yaxis.color = PHASE_TEXT.gas;
+    sensLayout.yaxis2 = { title: { text: `Condensate rate (${units.unitOf("liquidRate")})` },
+                          overlaying: "y", side: "right", rangemode: "tozero",
+                          color: PHASE_TEXT.oil, showgrid: false };
+    sensLayout.margin.r = 62;                      // room for the axis on the right
+  }
+  plot("chart-sens", rateTraces, sensLayout);
 
   const table = document.getElementById("sens-table");
   if (table) {
