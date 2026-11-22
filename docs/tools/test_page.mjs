@@ -49,11 +49,31 @@ const val = (id) => page.$eval(`#${id}`, (n) => n.value);
 const setVal = async (id, v) => {
   await page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event("input", { bubbles: true })); }, v);
 };
-// The rates across the top, the telemetry beside the well and the inflow model's own numbers under
-// the charts: between them they are what the page reports, and a check should not care which of
-// the three lists a number is in.
-const results = () => page.$$eval("#kpis li, #results li, #extras li", (lis) => lis.map(
+// The rates across the top, the numbers under the boxes, and the labels written onto the inflow
+// chart itself: between them they are what the page reports, and a check should not care which of
+// them a number is in. The reservoir pressure, the AOF and the operating point are now read off
+// the chart at the places they mean, so they are harvested from its annotations.
+const listPairs = () => page.$$eval("#kpis li, #extras li", (lis) => lis.map(
   (li) => [li.querySelector(".k")?.textContent || "", li.querySelector(".v")?.textContent || ""]));
+const markPairs = () => page.evaluate(() => {
+  const anns = (window.__plots["chart-nodal"]?.layout?.annotations) || [];
+  /** @type {string[][]} */
+  const out = [];
+  for (const a of anns) {
+    const lines = String(a.text).replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "")
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      // the operating point carries the rate and the flowing pressure as one label
+      out.push(["Operating rate (chart)", (lines[0].match(/[\d.,]+/) || [""])[0]]);
+      out.push(["Pwf (chart)", (lines[1].match(/[\d.,]+/) || [""])[0]]);
+      continue;
+    }
+    const m = lines[0].match(/^(.*?)\s*([\d.,]+)/);
+    if (m) out.push([m[1], m[2]]);
+  }
+  return out;
+});
+const results = async () => (await listPairs()).concat(await markPairs());
 const numberFrom = (pairs, key) => {
   const hit = pairs.find(([k]) => k.includes(key));
   return hit ? Number(String(hit[1]).replace(/,/g, "")) : NaN;
@@ -111,8 +131,10 @@ check("temperature is on the bottom axis", prof.layout.xaxis.title.text.includes
 check("pressure is on the top axis", prof.layout.xaxis2.title.text.includes("psig")
       && prof.layout.xaxis2.side === "top", prof.layout.xaxis2.title.text);
 check("the pressure line is drawn against the top axis", lineFor("Pressure").xaxis === "x2");
-check("the pressure line is the same blue as the IPR",
-      lineFor("Pressure").line.color === first.traces[0].line.color,
+// the pressure down the well is black, so it cannot be mistaken for the inflow curve next to it
+check("the pressure line is black, not the blue of the IPR",
+      lineFor("Pressure").line.color === "#111827"
+      && lineFor("Pressure").line.color !== first.traces[0].line.color,
       `${lineFor("Pressure").line.color} vs IPR ${first.traces[0].line.color}`);
 check("the profile starts at the wellhead pressure", near(lineFor("Pressure").x[0], 200, 1e-6),
       `${lineFor("Pressure").x[0]} psig`);

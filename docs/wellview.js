@@ -184,8 +184,9 @@ export function render(svg, spec) {
   const usableH = H - pad.t - pad.b;
   const scaleY = usableH / maxTvd;
   const scaleX = maxReach > 1 ? Math.min(usableW / maxReach, scaleY) : scaleY;
-  // Centred in the panel, but never so far left that the lift gas line runs off the edge.
-  const x0 = Math.max(pad.l + wingRoom + rCasing, (pad.l + W - pad.r) / 2);
+  // Sat a little right of centre: the lift gas line and the depth scale both want the left,
+  // and the room on the right was going spare.
+  const x0 = Math.max(pad.l + wingRoom + rCasing, (pad.l + W - pad.r) / 2 + W * 0.045);
   const X = (/** @type {number} */ r) => x0 + r * scaleX;
   const Y = (/** @type {number} */ d) => pad.t + d * scaleY;
   const ground = Y(0);
@@ -272,16 +273,19 @@ export function render(svg, spec) {
     return mix(PHASE_COLOURS.solutionGas, PHASE_COLOURS.gas, k);
   };
 
-  // ---- the reservoir, which is outside the casing ----
-  // Washed across the whole width it turned the fluid inside the casing olive, so it is drawn
-  // either side of the hole and not behind it.
-  const payTop = at(spec.perf_top)[1];
-  const payBot = at(perf_md)[1];
+  // ---- the reservoir, below the depth the well is drawn to ----
+  // The depth that was entered is the TOP of the perforations, so that is where the shared depth
+  // scale ends and where the well stops.  The perforated interval hangs below it in the bottom
+  // margin, not to scale: it is there to say the well is completed into rock, not how thick it is.
+  // Washed across the whole width the band turned the fluid inside the casing olive, so it is
+  // drawn either side of the hole and not behind it.
+  const payTop = Y(maxTvd);
+  const payBot = payTop + Math.min(pad.b - 14, 42);
   for (const s of [-1, 1]) {
     tip(svg.appendChild(node("rect", { class: "wv-pay",
-      x: s < 0 ? bx - rCasing - 34 : bx + rCasing, y: payTop,
-      width: 34, height: Math.max(payBot - payTop, 3), fill: "#b98a5a", opacity: 0.4 })),
-      "Reservoir");
+      x: s < 0 ? bx - rCasing - 30 : bx + rCasing, y: payTop,
+      width: 30, height: Math.max(payBot - payTop, 3), fill: "#b98a5a", opacity: 0.4 })),
+      "Reservoir: the perforated interval, below the top perforation depth");
   }
 
   // ---- what is standing in the annulus, and in the casing below the packer ----
@@ -300,6 +304,9 @@ export function render(svg, spec) {
   }
   tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, PHASE_COLOURS.oil,
              { id: "wv-rathole", opacity: 0.22 }), "Reservoir fluid, below the packer");
+  svg.appendChild(node("rect", { x: at(perf_md)[0] - rCasing, y: Y(maxTvd),
+                                 width: 2 * rCasing, height: Math.min(pad.b - 14, 42),
+                                 fill: PHASE_COLOURS.oil, opacity: 0.22 }));
 
   // ---- the fluid in the tubing ----
   // It stops at the swab valve, which is shut: nothing stands in the pipe above it.
@@ -400,6 +407,8 @@ export function render(svg, spec) {
     const endP = at(spec.shoe_md);
     const endN = normalAt(spec.shoe_md);
     tub.push([endP[0] + endN[0] * s * rTubing, endP[1] + endN[1] * s * rTubing]);
+    // the casing runs on down through the perforated interval, which is below the depth scale
+    cas.push([cas[cas.length - 1][0], payBot]);
     const nCap = normalAt(topMd);
     const capP = [bx + nCap[0] * s * rTubing, CAP_Y];
     tip(svg.appendChild(node("path", { class: "wv-tubing",
@@ -445,41 +454,30 @@ export function render(svg, spec) {
   // ---- the perforations: horizontal, through both walls, stopping short of the shoe ----
   /** @type {{x: number, y: number, nx: number, ny: number}[]} */
   const perfs = [];
-  const perfBot = spec.perf_top + (perf_md - spec.perf_top) * 0.62;
-  const nPerf = clamp(Math.round((payBot - payTop) * 0.62 / 6), 4, 9);
+  const endX = at(perf_md)[0];
+  const perfBotY = payBot - 11;                 // they stop short of the shoe, leaving a sump
+  const nPerf = clamp(Math.round((perfBotY - payTop - 6) / 9), 3, 8);
   for (let i = 0; i < nPerf; i++) {
-    const md = spec.perf_top + (perfBot - spec.perf_top) * (i + 0.4) / nPerf;
-    const p = at(md);
-    const n = normalAt(md);
+    const y = payTop + 6 + (perfBotY - payTop - 6) * i / Math.max(nPerf - 1, 1);
     for (const side of [-1, 1]) {
-      const to = rCasing + 22;
-      tip(svg.appendChild(node("path", {
-        d: `M${p[0] + n[0] * side * rCasing},${p[1] + n[1] * side * rCasing} `
-           + `L${p[0] + n[0] * side * to},${p[1] + n[1] * side * to}`,
+      tip(svg.appendChild(node("line", { x1: endX + side * rCasing, y1: y,
+        x2: endX + side * (rCasing + 20), y2: y,
         stroke: "#7c3f1d", "stroke-width": 2.6, "stroke-linecap": "round" })), "Perforations");
-      perfs.push({ x: p[0] + n[0] * side * to, y: p[1] + n[1] * side * to,
-                   nx: -n[0] * side, ny: -n[1] * side });
+      perfs.push({ x: endX + side * (rCasing + 20), y, nx: -side, ny: 0 });
     }
   }
 
   // ---- the casing shoe, at the bottom of the reservoir ----
   // A solid wedge standing on the bottom of the casing: straight edge up the casing wall, flat base
   // along the bottom and the slope facing out into the formation.
-  const endPt = at(perf_md);
-  const endN = normalAt(perf_md);
-  const down = [endN[1], -endN[0]];
-  svg.appendChild(node("path", {
-    d: `M${endPt[0] - endN[0] * rCasing},${endPt[1] - endN[1] * rCasing} `
-       + `L${endPt[0] + endN[0] * rCasing},${endPt[1] + endN[1] * rCasing}`,
-    stroke: INK, "stroke-width": 3.2 }));
+  svg.appendChild(node("line", { x1: endX - rCasing, y1: payBot, x2: endX + rCasing, y2: payBot,
+                                 stroke: INK, "stroke-width": 3.2 }));
   for (const side of [-1, 1]) {
-    const ax = endPt[0] + endN[0] * side * rCasing;
-    const ay = endPt[1] + endN[1] * side * rCasing;
-    const up = 16 * girth;
+    const ax = endX + side * rCasing;
+    const up = 15 * girth;
     const out = 9 * girth;
     tip(svg.appendChild(node("polygon", { class: "wv-shoe",
-      points: `${ax},${ay} ${ax - down[0] * up},${ay - down[1] * up} `
-              + `${ax + endN[0] * side * out},${ay + endN[1] * side * out}`,
+      points: `${ax},${payBot} ${ax},${payBot - up} ${ax + side * out},${payBot}`,
       fill: INK })), "Casing shoe");
   }
 
@@ -540,7 +538,9 @@ export function render(svg, spec) {
     }
     svg.appendChild(valveSymbol(outX - wingDir * (wingRoom - 10) * 0.42, INLET_Y, "wv-annwing",
                                 glOn, "Annulus wing valve: lift gas into the annulus"));
-    svg.appendChild(node("text", { x: Math.max(outX - VR - 4, 4), y: INLET_Y - VR - 9,
+    // hard against the left edge, above the line: anywhere nearer the well and it ran into the
+    // annulus seal
+    svg.appendChild(node("text", { x: wingDir < 0 ? 4 : W - 4, y: INLET_Y - 13,
                                    class: "wv-lbl", fill: glOn ? "#8a5a00" : "#64748b",
                                    "text-anchor": wingDir < 0 ? "start" : "end" },
                                  glOn ? "lift gas in: ON" : "lift gas in: OFF"));

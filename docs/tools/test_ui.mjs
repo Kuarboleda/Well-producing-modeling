@@ -288,7 +288,7 @@ const depths = await page.evaluate(() => {
   const labels = [...svg.querySelectorAll("text.wv-lbl")];
   const dot = (t) => { const i = labels.findIndex((n) => n.textContent === t);
     return i < 0 ? NaN : labels[i].getBoundingClientRect().top; };
-  const perfMarks = [...svg.querySelectorAll("path")].filter((n) => n.getAttribute("stroke") === "#7c3f1d");
+  const perfMarks = [...svg.querySelectorAll("line")].filter((n) => n.getAttribute("stroke") === "#7c3f1d");
   const packers = [...svg.querySelectorAll(".wv-packer rect")];
   const shoe = svg.querySelector("#wv-bore").getBoundingClientRect().bottom;
   return {
@@ -302,14 +302,18 @@ const depths = await page.evaluate(() => {
 });
 check("the packer is drawn", depths.nPacker >= 2, `${depths.nPacker} parts`);
 check("the perforations are drawn through both walls",
-      depths.nPerf >= 8 && depths.nPerf % 2 === 0, `${depths.nPerf} marks`);
+      depths.nPerf >= 6 && depths.nPerf % 2 === 0, `${depths.nPerf} marks`);
 check("and they stop short of the casing shoe",
       depths.botPerf < depths.casingBottom - 6,
       `lowest at ${Math.round(depths.botPerf)}px, shoe at ${Math.round(depths.casingBottom)}px`);
 check("the packer sits ABOVE the top of the perforations", depths.packer < depths.topPerf - 4,
       `packer at ${Math.round(depths.packer)}px, top perforation at ${Math.round(depths.topPerf)}px`);
+check("the perforations are horizontal",
+      await page.$$eval("#flow-svg line", (ns) => ns
+        .filter((n) => n.getAttribute("stroke") === "#7c3f1d")
+        .every((n) => n.getAttribute("y1") === n.getAttribute("y2"))));
 check("and the tailpipe ends at the top of the perforations",
-      Math.abs(depths.shoe - depths.topPerf) < 14,
+      Math.abs(depths.shoe - depths.topPerf) < 20,
       `tailpipe ends at ${Math.round(depths.shoe)}px, perforations `
         + `${Math.round(depths.topPerf)}-${Math.round(depths.botPerf)}px`);
 
@@ -495,13 +499,23 @@ check("the strip sits above the charts", await page.evaluate(() => {
   return k.bottom <= document.querySelector(".charts.three").getBoundingClientRect().top + 1;
 }));
 
-// ---- the telemetry replaces the old results strip ----
-const tele = await page.$eval("#results", (n) => n.innerText);
-for (const want of ["PWF", "AOF", "RESERVOIR PRESSURE"]) {
-  check(`the telemetry shows ${want.toLowerCase()}`, tele.toUpperCase().includes(want), tele.replace(/\n/g, " | "));
-}
-check("the telemetry sits beside the well",
-      await page.evaluate(() => document.querySelector("#results").closest(".flowcol") !== null));
+// ---- AOF, reservoir pressure and the operating point are written ON the inflow chart ----
+// They are facts about points on that curve, and in a list beside the drawing they were just
+// three numbers with nothing to tie them to.
+const marks = (await page.evaluate(() => window.__plots["chart-nodal"].layout.annotations))
+  .map((/** @type {any} */ a) => a.text);
+check("the inflow chart names the reservoir pressure",
+      marks.some((/** @type {string} */ s) => s.startsWith("Reservoir pressure")), marks.join(" | "));
+check("and the AOF", marks.some((/** @type {string} */ s) => s.startsWith("AOF")), marks.join(" | "));
+check("and gives the rate and the flowing pressure together at the operating point",
+      marks.some((/** @type {string} */ s) => /<b>[\d,]+ \S+<\/b><br>[\d,]+ /.test(s)),
+      marks.join(" | "));
+check("the rate axis says which rate it is",
+      (await page.evaluate(() => window.__plots["chart-nodal"].layout.xaxis.title.text))
+        .startsWith("Liquid rate"),
+      await page.evaluate(() => window.__plots["chart-nodal"].layout.xaxis.title.text));
+check("nothing is left in a list beside the drawing",
+      await page.evaluate(() => !document.querySelector("#results")));
 check("the model's own numbers are under the charts",
       (await page.$eval("#extras", (n) => n.innerText)).toUpperCase().includes("BUBBLE POINT"),
       await page.$eval("#extras", (n) => n.innerText));
@@ -525,12 +539,13 @@ check("the three columns are side by side",
 check("the input panel is narrower than before", geo.panel.w === 300, `${geo.panel.w}px`);
 check("the charts still have room", geo.nodal.w > 300 && geo.profile.w > 250,
       `${geo.nodal.w}px and ${geo.profile.w}px`);
-// the drawing carries labels down both sides, so it is the one that needs the width; the profile
-// gives up about a seventh of its own to pay for it
-check("the well column is the widest of the three", geo.flow.w > geo.nodal.w,
+// The two plots are read value by value, so they get the width; the drawing is read as a shape
+// and needs less of it, which is why it is the narrowest column rather than the widest.
+check("the well column is the narrowest of the three",
+      geo.flow.w < geo.nodal.w && geo.flow.w < geo.profile.w,
       `well ${geo.flow.w}px, inflow ${geo.nodal.w}px, profile ${geo.profile.w}px`);
-check("the profile is about a seventh narrower than the inflow chart",
-      Math.abs(geo.profile.w / geo.nodal.w - 0.85) < 0.05,
+check("and the two plots are within a tenth of each other",
+      Math.abs(geo.profile.w / geo.nodal.w - 1) < 0.1,
       `${(100 * geo.profile.w / geo.nodal.w).toFixed(0)} % of it`);
 check("the three panel titles are centred", await page.$$eval(
   ".charts.three > div > h2.sub", (ns) => ns.every((n) => getComputedStyle(n).textAlign === "center")));

@@ -21,7 +21,8 @@ import * as advice from "./advice.js";
 import * as wellview from "./wellview.js";
 
 // One place for the chart colours, so a pressure line is the same colour wherever it is drawn.
-const IPR_COLOUR = "#1f77b4";     // the inflow curve, and the pressure down the well
+const IPR_COLOUR = "#1f77b4";     // the inflow curve
+const PROFILE_P = "#111827";      // the pressure down the well: black, so it is not the IPR
 const VLP_COLOUR = "#d62728";     // the tubing curve
 const TEMP_COLOUR = "#ff7f0e";    // temperature
 const GASLIFT_COLOUR = "#2ca02c"; // the gas lift injection depth
@@ -34,7 +35,7 @@ const NODAL_POINTS = 25;          // points along each curve when the VLP is cal
 // one panel is at the same place on the other: these are the chart's top and bottom margins, and
 // the schematic is told to use them as its own padding.
 const DEPTH_TOP = 200;            // pixels above TVD = 0: the top axis in one, the tree in the other
-const DEPTH_BOTTOM = 46;          // pixels below the deepest point: the bottom axis, and rock
+const DEPTH_BOTTOM = 62;          // below the deepest point: the bottom axis, and the reservoir
 
 // ---------------------------------------------------------------------
 // Small helpers for reading the form
@@ -542,18 +543,6 @@ function message(where, html, kind = "") {
 }
 
 /**
- * The telemetry beside the well: the few numbers that say what this well is doing.
- * @param {{key: string, value: string}[]} items
- */
-function drawResults(items) {
-  const list = document.getElementById("results");
-  if (!list) return;
-  list.innerHTML = items
-    .map((it) => `<li><span class="k">${it.key}</span><span class="v">${it.value}</span></li>`)
-    .join("");
-}
-
-/**
  * The numbers that belong to the inflow model rather than to the well - the bubble point, the PI
  * the rock gives, Z and the gas viscosity, how long the transient solution lasts.  They sit under
  * the charts, out of the way of the telemetry.
@@ -571,15 +560,22 @@ function drawExtras(items) {
  * The strip across the top of the three panels: what the well makes, and how hard it is pulling to
  * make it.  These are the numbers someone looks for first, so they are not left to be found among
  * the telemetry beside the drawing.
- * @param {{key: string, value: string}[]} items @param {boolean} [waiting] true before Calculate
+ * @param {{key: string, value: string, phase?: string}[]} items @param {boolean} [waiting] true before Calculate
  */
 function drawKpis(items, waiting = false) {
   const list = document.getElementById("kpis");
   if (!list) return;
   list.classList.toggle("waiting", waiting);
   list.innerHTML = items
-    .map((it) => `<li><span class="k">${it.key}</span><span class="v">${it.value}</span></li>`)
+    .map((it) => `<li class="${it.phase ?? ""}"><span class="k">${it.key}</span>`
+                 + `<span class="v">${it.value}</span></li>`)
     .join("");
+}
+
+/** Which rate the inflow curve is drawn against: the liquid for an oil well, the gas for a gas
+ * well.  "Rate" on its own left it to the reader to work out. @param {Case} c */
+function rateName(c) {
+  return c.fluid_type === "oil" ? "Liquid rate" : "Gas rate";
 }
 
 /**
@@ -603,19 +599,21 @@ function kpiItems(c, res) {
     const f = /** @type {vlp.OilWaterFluid} */ (c.fluid);
     const oil = q * (1 - f.water_cut);
     return [
-      { key: `Liquid rate (${liquid})`, value: v(q, "liquidRate") },
-      { key: `Oil rate (${liquid})`, value: v(oil, "liquidRate") },
-      { key: `Water rate (${liquid})`, value: v(q * f.water_cut, "liquidRate") },
-      { key: `Gas rate (${gas})`, value: v(oil * f.producingGor() / 1000, "gasRate") },
+      { key: `Liquid rate (${liquid})`, value: v(q, "liquidRate"), phase: "liquid" },
+      { key: `Oil rate (${liquid})`, value: v(oil, "liquidRate"), phase: "oil" },
+      { key: `Water rate (${liquid})`, value: v(q * f.water_cut, "liquidRate"), phase: "water" },
+      { key: `Gas rate (${gas})`, value: v(oil * f.producingGor() / 1000, "gasRate"),
+        phase: "gas" },
       { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
     ];
   }
   const f = /** @type {vlp.GasFluid} */ (c.fluid);
   return [
-    { key: `Liquid rate (${liquid})`, value: v(q * (f.cgr + f.wgr) / 1000, "liquidRate") },
-    { key: `Condensate rate (${liquid})`, value: v(q * f.cgr / 1000, "liquidRate") },
-    { key: `Water rate (${liquid})`, value: v(q * f.wgr / 1000, "liquidRate") },
-    { key: `Gas rate (${gas})`, value: v(q, "gasRate") },
+    { key: `Liquid rate (${liquid})`, value: v(q * (f.cgr + f.wgr) / 1000, "liquidRate"),
+      phase: "liquid" },
+    { key: `Condensate rate (${liquid})`, value: v(q * f.cgr / 1000, "liquidRate"), phase: "oil" },
+    { key: `Water rate (${liquid})`, value: v(q * f.wgr / 1000, "liquidRate"), phase: "water" },
+    { key: `Gas rate (${gas})`, value: v(q, "gasRate"), phase: "gas" },
     { key: `Drawdown (${dp})`, value: v(c.p_res - (res ? res.pwf : 0), "pressureDiff") },
   ];
 }
@@ -674,18 +672,54 @@ function layoutFor(xTitle, yTitle) {
  * on top of the pressure axis's own "0" in the corner and the two were unreadable; starting a little
  * to the left of the origin moves the rate's zero clear of the corner without moving the curves.
  * @param {string} rateLabel @param {string} pressureLabel @param {number[]} q @param {number[]} p
+ * @param {any[]} [annotations]
  */
-function nodalLayout(rateLabel, pressureLabel, q, p) {
+function nodalLayout(rateLabel, pressureLabel, q, p, annotations = []) {
   const qMax = Math.max(...q, 1);
   const pMax = Math.max(...p, 1);
-  const base = layoutFor(`Rate (${rateLabel})`, `Flowing bottom-hole pressure (${pressureLabel})`);
+  const base = layoutFor(rateLabel, `Flowing bottom-hole pressure (${pressureLabel})`);
   return {
     ...base,
-    xaxis: { title: { text: `Rate (${rateLabel})` }, zeroline: false, gridcolor: "#eef2f5",
+    xaxis: { title: { text: rateLabel }, zeroline: false, gridcolor: "#eef2f5",
              range: [-qMax * 0.022, qMax * 1.03] },
     yaxis: { title: { text: `Flowing bottom-hole pressure (${pressureLabel})` }, zeroline: false,
              gridcolor: "#eef2f5", range: [0, pMax * 1.05] },
+    // the same plot area as the profile beside it, so the two charts line up top and bottom
+    margin: { l: 70, r: 16, t: DEPTH_TOP, b: DEPTH_BOTTOM },
+    legend: { orientation: "h", y: 1.02, yanchor: "bottom", x: 0 },
+    annotations,
   };
+}
+
+/**
+ * The numbers that used to sit in a list beside the drawing, written on the inflow chart at the
+ * places they actually mean: the reservoir pressure where the inflow curve meets the pressure
+ * axis, the AOF where it meets the rate axis, and at the operating point the rate and the flowing
+ * pressure TOGETHER - they are one fact about one point and reading them apart was the problem.
+ * @param {Case} c @param {number[]} q @param {number[]} p @param {number} aof
+ * @param {{q: number, pwf: number} | null} op
+ */
+function inflowMarks(c, q, p, aof, op) {
+  const pres = units.fromEngine("pressure", c.p_res);
+  const rateUnit = units.unitOf(c.rateUnit);
+  const pressureUnit = units.unitOf("pressure");
+  /** @type {any[]} */
+  const out = [
+    { x: 0, y: pres, xanchor: "left", yanchor: "bottom", xshift: 8, yshift: 4, showarrow: false,
+      text: `Reservoir pressure ${show(pres, 0)} ${pressureUnit}`,
+      font: { size: 11, color: IPR_COLOUR }, bgcolor: "rgba(255,255,255,0.8)" },
+    { x: aof, y: 0, xanchor: "right", yanchor: "bottom", xshift: -4, yshift: 6, showarrow: false,
+      text: `AOF ${show(aof, 0)} ${rateUnit}`,
+      font: { size: 11, color: IPR_COLOUR }, bgcolor: "rgba(255,255,255,0.8)" },
+  ];
+  if (op) {
+    out.push({ x: op.q, y: op.pwf, ax: 34, ay: -30, showarrow: true, arrowhead: 0, arrowwidth: 1,
+               arrowcolor: "#64748b", xanchor: "left", align: "left",
+               text: `<b>${show(op.q, 0)} ${rateUnit}</b><br>${show(op.pwf, 0)} ${pressureUnit}`,
+               font: { size: 11, color: "#111827" }, bgcolor: "rgba(255,255,255,0.85)",
+               bordercolor: "#cbd5e1", borderwidth: 1, borderpad: 3 });
+  }
+  return out;
 }
 
 const PLOT_CONFIG = { displayModeBar: false, responsive: true };
@@ -740,7 +774,6 @@ function recalculate() {
     lastCase = c;
   } catch (error) {
     lastCase = null;
-    drawResults([]);
     drawExtras([]);
     drawKpis([], true);
     wellState("");
@@ -755,7 +788,6 @@ function recalculate() {
   try {
     curve = ipr.ipr_curve(c.ipr_name, c.p_res, CURVE_POINTS, c.ipr_inputs);
   } catch (error) {
-    drawResults([]);
     drawExtras([]);
     drawKpis(kpiItems(c, null), true);
     wellState("");
@@ -771,11 +803,6 @@ function recalculate() {
   const qShown = curve.q.map((q) => units.fromEngine(c.rateUnit, q));
   const aof = qShown[qShown.length - 1];
 
-  drawResults([
-    { key: `AOF (${rateLabel})`, value: show(aof, 0) },
-    { key: `Reservoir pressure (${pressureLabel})`,
-      value: show(units.fromEngine("pressure", c.p_res), 0) },
-  ]);
   drawExtras(c.extra);
   drawKpis(kpiItems(c, null), true);
   wellState("The inflow only. Press Calculate for the tubing, the operating point and the flow.");
@@ -785,7 +812,8 @@ function recalculate() {
     x: qShown, y: pwfShown, mode: "lines", name: "IPR",
     line: { color: IPR_COLOUR, width: 2.5 },
     hovertemplate: `%{x:,.0f} ${rateLabel}<br>%{y:,.0f} ${pressureLabel}<extra>IPR</extra>`,
-  }], nodalLayout(rateLabel, pressureLabel, qShown, pwfShown));
+  }], nodalLayout(`${rateName(c)} (${rateLabel})`, pressureLabel, qShown, pwfShown,
+                  inflowMarks(c, qShown, pwfShown, aof, null)));
   clearChart("chart-profile");
   const note = document.getElementById("profile-note");
   if (note) note.textContent = "";
@@ -839,7 +867,6 @@ function runNodal() {
     { x: cv.vlp_q.map(toRate), y: cv.vlp_pwf.map(toP), mode: "lines", name: "VLP",
       line: { color: VLP_COLOUR, width: 2.5 } },
   ];
-  const items = [];
   if (res.found) {
     traces.push({ x: [toRate(/** @type {number} */ (res.q))],
                   y: [toP(/** @type {number} */ (res.pwf))],
@@ -851,13 +878,7 @@ function runNodal() {
                     mode: "markers", name: "Unstable crossing",
                     marker: { color: "#999", size: 9, symbol: "circle-open" } });
     }
-    // the rates themselves are in the strip across the top; what belongs beside the drawing is
-    // the pressure it is flowing at and what the reservoir could give
-    items.push({ key: `Pwf (${pressureLabel})`, value: show(toP(/** @type {number} */ (res.pwf)), 0) });
   }
-  items.push({ key: `AOF (${rateLabel})`, value: show(toRate(res.aof), 0) });
-  items.push({ key: `Reservoir pressure (${pressureLabel})`, value: show(toP(c.p_res), 0) });
-  drawResults(items);
   drawExtras(c.extra);
   drawKpis(kpiItems(c, res.found
     ? { q: /** @type {number} */ (res.q), pwf: /** @type {number} */ (res.pwf) }
@@ -865,7 +886,12 @@ function runNodal() {
 
   const allQ = [...cv.ipr_q.map(toRate), ...cv.vlp_q.map(toRate)];
   const allP = [...cv.ipr_pwf.map(toP), ...cv.vlp_pwf.map(toP)];
-  plot("chart-nodal", traces, nodalLayout(rateLabel, pressureLabel, allQ, allP));
+  plot("chart-nodal", traces,
+       nodalLayout(`${rateName(c)} (${rateLabel})`, pressureLabel, allQ, allP,
+                   inflowMarks(c, allQ, allP, toRate(res.aof), res.found
+                     ? { q: toRate(/** @type {number} */ (res.q)),
+                         pwf: toP(/** @type {number} */ (res.pwf)) }
+                     : null)));
   drawTable(cv.ipr_pwf.map(toP), cv.ipr_q.map(toRate), rateLabel, pressureLabel);
 
   const note = document.getElementById("profile-note");
@@ -999,11 +1025,28 @@ function drawProfile(tr, c) {
       hovertemplate: `%{x:,.0f} ${tempLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
     { x: pressure, y: tvd, xaxis: "x2",
       mode: "lines", name: `Pressure (${pressureLabel})`,
-      line: { color: IPR_COLOUR, width: 2.5 },
+      line: { color: PROFILE_P, width: 2.5 },
       hovertemplate: `%{x:,.0f} ${pressureLabel} at %{y:,.0f} ${lengthLabel}<extra></extra>` },
   ];
   /** @type {any[]} */
   const annotations = [];
+  // The slope of the pressure traverse, at five depths down it.  The gradient is what an engineer
+  // reads a profile FOR - it says what the fluid in that stretch of pipe weighs - and working it
+  // out off the axes by eye is the one thing the chart was not doing for them.
+  const gradUnit = `${pressureLabel}/${lengthLabel}`;
+  for (let i = 1; i <= 5; i++) {
+    const at = Math.round((tvd.length - 1) * (i - 0.5) / 5);
+    const lo = Math.max(at - 1, 0);
+    const hi = Math.min(at + 1, tvd.length - 1);
+    const dz = tvd[hi] - tvd[lo];
+    if (!(Math.abs(dz) > 1e-9)) continue;
+    annotations.push({
+      x: pressure[at], y: tvd[at], xref: "x2", yref: "y",
+      text: `${((pressure[hi] - pressure[lo]) / dz).toFixed(3)} ${gradUnit}`,
+      showarrow: false, xanchor: "right", xshift: -6, yanchor: "middle",
+      font: { size: 10, color: PROFILE_P }, bgcolor: "rgba(255, 255, 255, 0.82)",
+    });
+  }
   if (c.gas_lift) {
     const depth = units.fromEngine("length", wellmod.tvd_at(c.well, c.gas_lift.md));
     // drawn across the pressure axis, which is the line this depth belongs to
@@ -1037,8 +1080,8 @@ function drawProfile(tr, c) {
              tickfont: { color: TEMP_COLOUR }, gridcolor: "#eef2f5", zeroline: false,
              tick0: tFrom, dtick: tStep,
              range: [tFrom, Math.ceil(Math.max(...temperature) / tStep) * tStep] },
-    xaxis2: { title: { text: `Pressure (${pressureLabel})`, font: { color: IPR_COLOUR } },
-              tickfont: { color: IPR_COLOUR }, overlaying: "x", side: "top",
+    xaxis2: { title: { text: `Pressure (${pressureLabel})`, font: { color: PROFILE_P } },
+              tickfont: { color: PROFILE_P }, overlaying: "x", side: "top",
               gridcolor: "transparent", zeroline: false, tick0: 0, dtick: pStep,
               range: [0, Math.ceil(Math.max(...pressure) / pStep) * pStep] },
     // inside the chart, in the corner the two lines leave empty: between the top axis title and its
@@ -1101,19 +1144,12 @@ function patternCorrelationFor(inputs, chosen) {
 function completionDepths(c) {
   const perf_md = c.perf_md;
   const h = Number(c.ipr_inputs.h);
-  // The perforated interval is the pay thickness that was entered, but never thinner on screen than
-  // a band the perforations can be drawn across: a few tens of feet on a well thousands deep is a
-  // line, not an interval, and the drawing is a schematic rather than a scale section.
-  const interval = Math.min(Math.max(Number.isFinite(h) && h > 0 ? h : 0.03 * perf_md,
-                                     Math.min(650, perf_md * 0.08)),
+  // The depth that was entered is the TOP of the perforations, which is where the solver works the
+  // flowing pressure out and where the well drawing stops.  The perforated interval runs BELOW it,
+  // outside the depth scale the two panels share, so it is drawn in the margin under the well.
+  const interval = Math.min(Math.max(Number.isFinite(h) && h > 0 ? h : 0.03 * perf_md, 30),
                             perf_md * 0.2);
-  const perf_top = Math.max(perf_md - interval, perf_md * 0.6);
-  // A packer is usually set a hundred feet or two above the top of the perforations.  The tailpipe
-  // then carries on down past it and ends inside the perforated interval, so the fluid coming in
-  // through the perforations is met by the open end of the tubing rather than having to rise past
-  // it in the casing first.
-  // Neither of these is an input, so the drawing picks them - and it picks them far enough apart to
-  // be told apart on screen, which a hundred feet on an eight-thousand-foot well is not.
+  const perf_top = perf_md;
   const gap = Math.max(400, 0.05 * perf_md);
   const packer_md = Math.max(perf_top - gap, perf_md * 0.4);
   const shoe_md = perf_top;          // the tailpipe ends at the top of the perforations

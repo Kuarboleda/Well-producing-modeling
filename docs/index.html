@@ -174,12 +174,6 @@
   .results li { margin: 0 0 8px; }
   .results .k { display: block; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
   .results .v { font-size: 20px; font-variant-numeric: tabular-nums; }
-  /* beside the well the telemetry is a column of label-and-value rows, not a wide strip */
-  .flowcol .results { display: block; margin: 12px 0 8px; }
-  .flowcol .results li { display: flex; align-items: baseline; justify-content: space-between;
-                         gap: 10px; margin: 0 0 5px; }
-  .flowcol .results .k { font-size: 10.5px; }
-  .flowcol .results .v { font-size: 17px; }
   .results.small { gap: 0 20px; margin-top: 10px; }
   .results.small .v { font-size: 14px; }
   .results.small .k { font-size: 10px; }
@@ -202,6 +196,11 @@
              color: var(--ink-soft); white-space: nowrap; overflow: hidden;
              text-overflow: ellipsis; }
   .kpis .v { font-size: 21px; font-variant-numeric: tabular-nums; line-height: 1.25; }
+  /* each rate in the colour that phase is drawn in, on the schematic and in the charts */
+  .kpis li.oil .v { color: #15803d; }
+  .kpis li.water .v { color: #1d4ed8; }
+  .kpis li.gas .v { color: #b91c1c; }
+  .kpis li.liquid .v { color: #0f766e; }
   .kpis.waiting .v { color: var(--ink-soft); }
 
   .charts { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -210,9 +209,9 @@
   /* Three across, in proportion rather than at fixed widths: the inflow chart, then the profile a
      seventh narrower than it, and the room that frees goes to the well drawing, which needs the
      width most because it carries labels on both sides. */
-  .charts.three > div { flex: 1 1 0; min-width: 0; }
-  .charts.three > .profilecol { flex: 0.85 1 0; }
-  .charts.three > .flowcol { flex: 1.3 1 0; }
+  .charts.three > div { flex: 1.2 1 0; min-width: 0; }
+  .charts.three > .profilecol { flex: 1.12 1 0; }
+  .charts.three > .flowcol { flex: 0.86 1 0; }
   /* both of these are 520 tall, and app.js puts TVD = 0 and the deepest point at the same height in
      each, so a depth lines up across the two panels */
   .chart { width: 100%; height: 640px; }
@@ -270,7 +269,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 22 Nov 2026 20:51 (9644f88)</span>
+  <span class="sub build" id="build">build 22 Nov 2026 21:16 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -548,7 +547,7 @@
             <option value="deviated">Deviated / horizontal (MD, TVD table)</option>
           </select>
         </label>
-        <label id="f-depth">Perforation depth, MD = TVD <span class="u" data-unit="length"></span>
+        <label id="f-depth">Top perforation depth, MD = TVD <span class="u" data-unit="length"></span>
           <input type="number" id="depth" value="8000" step="100" min="500" max="40000">
         </label>
         <div id="f-survey">
@@ -714,7 +713,6 @@
             <svg id="flow-svg" data-w="420" data-h="520" preserveAspectRatio="xMidYMid meet" role="img"
                  aria-label="The well from the tubing head to the perforations, with the fluid flowing"></svg>
           </div>
-          <ul class="results" id="results"></ul>
           <p class="state" id="well-state"></p>
           <div id="flow-legend" class="flow-legend"></div>
         </div>
@@ -885,6 +883,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=9644f88"></script>
+<script type="module" src="app.js?v=local"></script>
 </body>
 </html>
