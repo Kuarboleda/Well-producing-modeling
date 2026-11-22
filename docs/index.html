@@ -205,17 +205,17 @@
   .kpis.waiting .v { color: var(--ink-soft); }
 
   .charts { display: flex; flex-wrap: wrap; gap: 16px; }
-  .charts > div { flex: 1 1 380px; min-width: 0; padding-bottom: 10px; }
+  .charts > div { flex: 1 1 380px; min-width: 0; }
   .charts > div > h2.sub { text-align: center; }
-  /* Three across, in proportion rather than at fixed widths.  The drawing needs less room than it
-     looks: with the component names moved into hover tooltips it has no label gutter, so the width
-     it gives up goes to the two plots, which are read value by value. */
-  .charts.three > div { flex: 1.1 1 0; min-width: 0; }
-  .charts.three > .profilecol { flex: 0.95 1 0; }
-  .charts.three > .flowcol { flex: 1.14 1 0; }
-  /* both of these are the same height, and app.js puts TVD = 0 and the deepest point at the same
-     height in each, so a depth lines up across the two panels */
-  .chart { width: 100%; height: 560px; }
+  /* Three across, in proportion rather than at fixed widths: the inflow chart, then the profile a
+     seventh narrower than it, and the room that frees goes to the well drawing, which needs the
+     width most because it carries labels on both sides. */
+  .charts.three > div { flex: 1 1 0; min-width: 0; }
+  .charts.three > .profilecol { flex: 0.85 1 0; }
+  .charts.three > .flowcol { flex: 1.3 1 0; }
+  /* both of these are 520 tall, and app.js puts TVD = 0 and the deepest point at the same height in
+     each, so a depth lines up across the two panels */
+  .chart { width: 100%; height: 520px; }
   .flowcol .chart { display: flex; justify-content: center; }
   .flow-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px;
                  color: var(--ink-soft); margin-top: 8px; }
@@ -270,7 +270,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 22 Nov 2026 19:15 (a444d4c)</span>
+  <span class="sub build" id="build">build 22 Nov 2026 19:46 (ec4b53b)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -885,6 +885,6 @@
   results must be checked by a competent engineer before being relied on.
 </footer>
 
-<script type="module" src="app.js?v=a444d4c"></script>
+<script type="module" src="app.js?v=ec4b53b"></script>
 </body>
 </html>
