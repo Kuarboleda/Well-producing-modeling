@@ -33,7 +33,7 @@ const NODAL_POINTS = 25;          // points along each curve when the VLP is cal
 // same height and put TVD = 0 and the deepest point at the same two heights, so a depth read off
 // one panel is at the same place on the other: these are the chart's top and bottom margins, and
 // the schematic is told to use them as its own padding.
-const DEPTH_TOP = 132;            // pixels above TVD = 0: the top axis in one, the tree in the other
+const DEPTH_TOP = 150;            // pixels above TVD = 0: the top axis in one, the tree in the other
 const DEPTH_BOTTOM = 46;          // pixels below the deepest point: the bottom axis, and rock
 
 // ---------------------------------------------------------------------
@@ -1101,8 +1101,11 @@ function patternCorrelationFor(inputs, chosen) {
 function completionDepths(c) {
   const perf_md = c.perf_md;
   const h = Number(c.ipr_inputs.h);
+  // The perforated interval is the pay thickness that was entered, but never thinner on screen than
+  // a band the perforations can be drawn across: thirty feet on an eight-thousand-foot well is a
+  // line, not an interval.
   const interval = Math.min(Math.max(Number.isFinite(h) && h > 0 ? h : 0.03 * perf_md,
-                                     Math.min(50, perf_md * 0.02)),
+                                     Math.min(240, perf_md * 0.03)),
                             perf_md * 0.2);
   const perf_top = Math.max(perf_md - interval, perf_md * 0.6);
   // A packer is usually set a hundred feet or two above the top of the perforations.  The tailpipe

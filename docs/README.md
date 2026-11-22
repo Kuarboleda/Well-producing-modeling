@@ -43,25 +43,35 @@ measurable rather than a matter of taste, so it was measured:
   injection point, from the same survey the calculation uses. A survey typed wrong or a valve below
   the perforations is obvious in a picture and invisible in a column of numbers.
 * Beside the pressure and temperature profile is **the well itself**, drawn from the inputs: the
-  Christmas tree - swab, two master valves and the production wing - the wellhead annulus seal, the
-  gas lift injection wing below it, the casing, the tubing, the production packer, the tailpipe, the
-  gas lift valve, the perforations and the casing shoe, with a depth scale and the fluid animated
-  through them.  Valves are the standard circle-and-cross symbol and seals are red crossed blocks.
+  Christmas tree - cap, swab, two master valves and the production wing - the wellhead spool
+  standing above ground with the annulus seal on it, the gas lift injection wing below that seal,
+  the casing, the tubing, the production packer, the tailpipe, the side pocket mandrel, the
+  perforations and the casing shoe, with a depth scale and the fluid animated through them.  Valves
+  are the standard circle-and-cross symbol and seals are red crossed blocks.  Component names are
+  hover tooltips rather than a column of labels: the drawing is the thing being looked at, and
+  leader lines down the side were crowding it out.
 
   The packer is drawn **above** the top of the perforations, sealing tubing to casing with no gap,
   and the tailpipe hangs on past it into the perforated interval, so formation fluid entering
   through the perforations meets the open end of the tubing.
 
-  The annulus says what state the well is in.  With gas lift on it holds a gas column from surface
-  down to the gas lift valve and dead completion fluid below it, which is what an unloaded annulus
-  looks like, and gas jets through the valve into the tubing.  With gas lift off there is no gas in
-  it at all: the whole annulus is dead fluid and the well flows on its own.
+  The annulus says what state the well is in.  With gas lift on it holds a gas column from the
+  wellhead seal down to the gas lift valve, with slow pulses showing it being pushed down, and dead
+  completion fluid below it - which is what an unloaded annulus looks like.  Gas jets through the
+  mandrel into the tubing.  With gas lift off there is no gas in it at all: the whole annulus is
+  dead fluid and the well flows on its own.
+
+  Everything the well produces leaves through the production wing.  The pocket above the tee is a
+  dead leg, so it is drawn filled but still.
 
   Inside the tubing the flow regime is **drawn**, not tinted.  Bubble flow is a liquid column with
   dispersed bubbles in it; slug flow is dome-topped Taylor bubbles spanning most of the bore with
   liquid slugs between them; churn is distorted gas pockets and frothy liquid bridges; annular is a
   gas core inside a wavy liquid film on the wall, with entrained droplets.  Hovering anywhere on the
-  tubing says which regime it is and over what depths.  Oil is green, water blue and gas red - the
+  tubing says which regime it is and over what depths.  Which regimes appear is the correlation's
+  answer, not the drawing's choice: a well whose gas velocity never gets high enough will show
+  bubble and slug and nothing above them.  Within and across them the gas grows steadily towards
+  surface as the pressure falls, so one regime shades into the next instead of changing at a line.  Oil is green, water blue and gas red - the
   bright red is injected lift gas, the deep red is solution gas from the reservoir, and above the
   valve, where the two have mixed, it is the red in between.
 
