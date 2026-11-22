@@ -34,7 +34,11 @@ const NODAL_POINTS = 25;          // points along each curve when the VLP is cal
 // same height and put TVD = 0 and the deepest point at the same two heights, so a depth read off
 // one panel is at the same place on the other: these are the chart's top and bottom margins, and
 // the schematic is told to use them as its own padding.
-const DEPTH_TOP = 200;            // pixels above TVD = 0: the top axis in one, the tree in the other
+// This is only the paper a chart needs above its own plot: the pressure axis along the top of the
+// profile, and the legend over the inflow curve.  The drawing's column starts higher up the page,
+// where the strip of rates and the titles are, and drawWell adds that head start to its own
+// padding, so the tree has more room than this without any of it going to waste on the charts.
+const DEPTH_TOP = 66;             // pixels above TVD = 0: the top axis in one, the tree in the other
 const DEPTH_BOTTOM = 62;          // below the deepest point: the bottom axis, and the reservoir
 
 // ---------------------------------------------------------------------
@@ -1186,11 +1190,18 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
   // because the depth scale has to be in step with the chart beside it: one drawing unit must be one
   // pixel, or the padding that aligns the two panels would be scaled away with everything else.
   const box = svg.parentElement;
+  // The drawing's box runs the full height of the row, while the plots beside it start lower down,
+  // under the strip of rates and their own titles.  TVD = 0 still has to sit level with depth zero
+  // on the profile, so that head start is added to the padding above the drawing.
+  let headStart = 0;
   if (box) {
     const r = box.getBoundingClientRect();
     if (r.width > 40 && r.height > 40) {
       svg.setAttribute("data-w", String(Math.round(r.width)));
       svg.setAttribute("data-h", String(Math.round(r.height)));
+      const plot = document.getElementById("chart-profile");
+      const pr = plot ? plot.getBoundingClientRect() : null;
+      if (pr && pr.height > 40) headStart = Math.max(Math.round(pr.top - r.top), 0);
     }
   }
   const { perf_top, packer_md, shoe_md } = completionDepths(c);
@@ -1218,8 +1229,10 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     toShown: (ft) => units.fromEngine("length", ft),
     pattern: tr ? { md: tr.md, regime: tr.regime } : null,
     tree: true,
-    padTop: DEPTH_TOP,
+    padTop: DEPTH_TOP + headStart,
     padBottom: DEPTH_BOTTOM,
+    // the profile next to it carries the depths; a second scale on the drawing only costs width
+    depthAxis: false,
   };
   const view = wellview.render(svg, spec);
   if (wellView) wellView.player.replace(view);

@@ -76,6 +76,7 @@ function mix(a, b, k) {
  * @property {boolean} [tree]       draw the Christmas tree and its valves
  * @property {number} [padTop]      pixels above TVD = 0, to match the chart beside it
  * @property {number} [padBottom]   pixels below the deepest TVD, likewise
+ * @property {boolean} [depthAxis]  draw the depth scale down the left; on unless turned off
  * @property {boolean} [masterOpen] whether the master valves are drawn open
  * @property {boolean} [chokeOpen]  whether the production wing valve is drawn open
  */
@@ -160,8 +161,11 @@ export function render(svg, spec) {
   // pad.t pixels below the top of the panel and the deepest point pad.b above the bottom in BOTH,
   // so a depth read off one panel is at the same height on the other.  The page passes the two
   // paddings in, because they are the chart's own top and bottom margins.
+  // With no scale down the side there is nothing on the left to make room for but the lift gas
+  // line, so that margin goes back to the drawing.
+  const depthAxis = spec.depthAxis !== false;
   const pad = { t: spec.padTop ?? (tree ? 200 : 34), b: spec.padBottom ?? 26,
-                l: compact ? 40 : 60, r: compact ? 14 : 20 };
+                l: !depthAxis ? 12 : compact ? 40 : 60, r: compact ? 14 : 20 };
 
   const glOn = spec.gl_md !== null && spec.gl_md > 0 && spec.gl_md < spec.shoe_md;
   const glMd = glOn ? Number(spec.gl_md) : 0;
@@ -577,18 +581,25 @@ export function render(svg, spec) {
   }
 
   // ---- the depth scale ----
-  const stepFt = maxTvd > 12000 ? 4000 : maxTvd > 6000 ? 2000 : maxTvd > 2500 ? 1000 : 500;
-  for (let d = 0; d <= maxTvd + 1; d += stepFt) {
-    const y = Y(d);
-    svg.appendChild(node("line", { x1: axisX - 5, y1: y, x2: axisX, y2: y, stroke: "#94a3b8",
-                                   "stroke-width": 0.8 }));
-    svg.appendChild(node("text", { x: axisX - 8, y: y + 3, class: "wv-depth",
-                                   "text-anchor": "end" }, fmt(spec.toShown(d))));
+  // The depth the drawing is to is recorded on the SVG itself whether or not the scale is drawn,
+  // because the panel beside it has to be able to line its own depths up with this one.
+  svg.setAttribute("data-y-zero", String(ground));
+  svg.setAttribute("data-y-deep", String(Y(maxTvd)));
+  svg.setAttribute("data-deep-tvd", String(maxTvd));
+  if (depthAxis) {
+    const stepFt = maxTvd > 12000 ? 4000 : maxTvd > 6000 ? 2000 : maxTvd > 2500 ? 1000 : 500;
+    for (let d = 0; d <= maxTvd + 1; d += stepFt) {
+      const y = Y(d);
+      svg.appendChild(node("line", { x1: axisX - 5, y1: y, x2: axisX, y2: y, stroke: "#94a3b8",
+                                     "stroke-width": 0.8 }));
+      svg.appendChild(node("text", { x: axisX - 8, y: y + 3, class: "wv-depth",
+                                     "text-anchor": "end" }, fmt(spec.toShown(d))));
+    }
+    svg.appendChild(node("line", { x1: axisX, y1: ground, x2: axisX, y2: Y(maxTvd),
+                                   stroke: "#e2e8f0", "stroke-width": 0.8 }));
+    svg.appendChild(node("text", { x: 2, y: ground - 14, class: "wv-depth" },
+                                 `TVD, ${spec.lengthUnit}`));
   }
-  svg.appendChild(node("line", { x1: axisX, y1: ground, x2: axisX, y2: Y(maxTvd),
-                                 stroke: "#e2e8f0", "stroke-width": 0.8 }));
-  svg.appendChild(node("text", { x: 2, y: ground - 14, class: "wv-depth" },
-                               `TVD, ${spec.lengthUnit}`));
 
   // ---- the layers the moving fluid is drawn in ----
   // The fluid is masked to the inside of the pipe it is in.  The mask leaves out the pipe above the

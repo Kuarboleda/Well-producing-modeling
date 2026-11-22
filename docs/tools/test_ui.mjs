@@ -332,10 +332,10 @@ check("the lift gas inlet reads ON", (await tips()).some((s) => s.startsWith("An
 check("and the inlet sits above the 0 ft line, on the wellhead",
       await page.evaluate(() => {
         const svg = document.querySelector("#flow-svg");
+        const k = svg.viewBox.baseVal.height / svg.getBoundingClientRect().height;
         const wing = svg.querySelector("#wv-annwing").getBoundingClientRect();
-        const zero = [...svg.querySelectorAll("text.wv-depth")]
-          .find((n) => n.textContent === "0").getBoundingClientRect();
-        return wing.bottom < zero.bottom;
+        const top = svg.getBoundingClientRect().top;
+        return (wing.bottom - top) * k < Number(svg.getAttribute("data-y-zero"));
       }));
 // Where the parts sit ACROSS the well, in drawing units measured from its centre line.  A stroked
 // path reports no width of its own, so the widths come from the stroke and the centre from the bore.
@@ -452,14 +452,19 @@ const lineup = await page.evaluate(() => {
   const deepest = layout.yaxis.range[0];
   const plotTop = chart.top + layout.margin.t;
   const plotH = chart.height - layout.margin.t - layout.margin.b;
+  // the drawing no longer prints a scale of its own - the profile beside it carries the depths -
+  // so it records the two heights it was drawn to, and every depth between them follows from those
   const svg = document.querySelector("#flow-svg");
-  const ticks = [...svg.querySelectorAll("text.wv-depth")]
-    .filter((n) => /^[\d,]+$/.test(n.textContent))
-    .map((n) => {
-      const r = n.getBoundingClientRect();
-      return { ft: Number(n.textContent.replace(/,/g, "")), y: (r.top + r.bottom) / 2 };
-    });
-  return ticks.map((t) => ({ ft: t.ft, drawing: t.y, chart: plotTop + (t.ft / deepest) * plotH }));
+  const box = svg.getBoundingClientRect();
+  const k = box.height / svg.viewBox.baseVal.height;         // drawing units to pixels on screen
+  const yZero = Number(svg.getAttribute("data-y-zero"));
+  const yDeep = Number(svg.getAttribute("data-y-deep"));
+  const deepFt = Number(svg.getAttribute("data-deep-tvd"));
+  return [0, 0.25, 0.5, 0.75, 1].map((f) => ({
+    ft: Math.round(f * deepFt),
+    drawing: box.top + (yZero + f * (yDeep - yZero)) * k,
+    chart: plotTop + (f * deepFt / deepest) * plotH,
+  }));
 });
 check("a depth is at the same height on both panels",
       lineup.length > 1 && lineup.every((t) => Math.abs(t.drawing - t.chart) < 3),
@@ -494,9 +499,28 @@ for (const want of ["LIQUID RATE", "OIL RATE", "WATER RATE", "GAS RATE", "DRAWDO
   check(`the strip shows ${want.toLowerCase()}`, kpis.includes(want), kpis.replace(/\n/g, " | "));
 }
 check("the strip has a number in it", /\d/.test(kpis), kpis.replace(/\n/g, " | "));
-check("the strip sits above the charts", await page.evaluate(() => {
+// It belongs to the two plots, not to the drawing: it sits above both of them and stops short of
+// the drawing's column rather than running over the top of it.
+check("the strip sits above the two plots and clear of the drawing", await page.evaluate(() => {
   const k = document.querySelector("#kpis").getBoundingClientRect();
-  return k.bottom <= document.querySelector(".charts.three").getBoundingClientRect().top + 1;
+  const plots = [...document.querySelectorAll("#chart-nodal, #chart-profile")]
+    .map((n) => n.getBoundingClientRect());
+  const well = document.querySelector("#flow-well").getBoundingClientRect();
+  return plots.every((p) => k.bottom <= p.top + 1) && k.right <= well.left + 1;
+}));
+check("the drawing has no title and no depth scale of its own", await page.evaluate(() => {
+  const svg = document.querySelector("#flow-svg");
+  return svg.querySelectorAll("text.wv-depth").length === 0
+    && ![...document.querySelectorAll(".charts.three h2.sub")]
+         .some((h) => /schematic/i.test(h.textContent));
+}));
+// and it starts at the very top of the row, so the height the strip and the titles take is height
+// the drawing gets rather than height the page loses
+check("the drawing runs the full height of the row", await page.evaluate(() => {
+  const well = document.querySelector("#flow-well").getBoundingClientRect();
+  const row = document.querySelector(".charts.three").getBoundingClientRect();
+  const plot = document.querySelector("#chart-profile").getBoundingClientRect();
+  return Math.abs(well.top - row.top) < 2 && well.height > plot.height + 40;
 }));
 
 // ---- AOF, reservoir pressure and the operating point are written ON the inflow chart ----
@@ -547,8 +571,9 @@ check("the well column is the narrowest of the three",
 check("and the two plots are within a tenth of each other",
       Math.abs(geo.profile.w / geo.nodal.w - 1) < 0.1,
       `${(100 * geo.profile.w / geo.nodal.w).toFixed(0)} % of it`);
-check("the three panel titles are centred", await page.$$eval(
-  ".charts.three > div > h2.sub", (ns) => ns.every((n) => getComputedStyle(n).textAlign === "center")));
+check("the two plot titles are centred, and the drawing has none", await page.$$eval(
+  ".charts.three > h2.sub",
+  (ns) => ns.length === 2 && ns.every((n) => getComputedStyle(n).textAlign === "center")));
 check("no sideways scrolling", !geo.overflowX);
 
 // and on a laptop, where it matters most
@@ -562,8 +587,11 @@ const lapGeo = await lap.evaluate(() => {
   return { nodal: b("#chart-nodal"), profile: b("#chart-profile"), flow: b("#flow-well"),
            overflowX: document.documentElement.scrollWidth > window.innerWidth };
 });
+// the two plots start level with each other; the drawing starts higher, because it has the row's
+// full height while they give theirs up to the strip of rates and their titles
 check("on a 1366px laptop the three still fit across",
-      lapGeo.nodal.top === lapGeo.profile.top && lapGeo.profile.top === lapGeo.flow.top,
+      lapGeo.nodal.top === lapGeo.profile.top && lapGeo.flow.top < lapGeo.profile.top
+      && lapGeo.nodal.left < lapGeo.profile.left && lapGeo.profile.left < lapGeo.flow.left,
       `tops ${lapGeo.nodal.top}, ${lapGeo.profile.top}, ${lapGeo.flow.top}`);
 check("and the two charts are still usable",
       lapGeo.nodal.w > 280 && lapGeo.profile.w > 250, `${lapGeo.nodal.w}px, ${lapGeo.profile.w}px`);
