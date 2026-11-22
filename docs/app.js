@@ -1034,11 +1034,13 @@ function drawProfile(tr, c) {
   ];
   /** @type {any[]} */
   const annotations = [];
-  // The slope of the pressure traverse, at five depths down it.  The gradient is what an engineer
+  // The slope of the pressure traverse, down the length of it.  The gradient is what an engineer
   // reads a profile FOR - it says what the fluid in that stretch of pipe weighs - and working it
-  // out off the axes by eye is the one thing the chart was not doing for them.
+  // out off the axes by eye is the one thing the chart was not doing for them.  The shallowest of
+  // the five is left off: up there the pressure is low, so its label runs back over the depth
+  // axis, and the stretch it describes is the one the wellhead pressure already pins down.
   const gradUnit = `${pressureLabel}/${lengthLabel}`;
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 2; i <= 5; i++) {
     const at = Math.round((tvd.length - 1) * (i - 0.5) / 5);
     const lo = Math.max(at - 1, 0);
     const hi = Math.min(at + 1, tvd.length - 1);
@@ -1228,6 +1230,9 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     lengthUnit: units.unitOf("length"),
     toShown: (ft) => units.fromEngine("length", ft),
     pattern: tr ? { md: tr.md, regime: tr.regime } : null,
+    // Below the bubble point the gas is already out of solution in the rock, so it arrives at the
+    // perforations as free gas; a gas well obviously brings gas in whatever the pressure.
+    freeGasIn: !isOil || (Number(c.ipr_inputs?.pb) > 0 && c.p_res < Number(c.ipr_inputs.pb)),
     tree: true,
     padTop: DEPTH_TOP + headStart,
     padBottom: DEPTH_BOTTOM,
@@ -1257,6 +1262,11 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
         html += `<span><i style="background:${wellview.PHASE_COLOURS.liftGas};`
           + `border-radius:50%"></i>Lift gas</span>`;
       }
+      // what the colour behind the drops is, which is a fair thing to wonder: it is not a phase
+      const liquid = c.fluid_type === "oil" ? "oil" : "condensate";
+      html += `<span class="flow-note">The drops are what is moving. The pale wash behind them is `
+        + `the liquid standing in the pipe, shaded between ${liquid} and water by the water cut.`
+        + `</span>`;
       // then the regimes this well has, named rather than swatched: each one is drawn as its own
       // shape inside the tubing, so a colour chip would say nothing
       const rows = Object.keys(wellview.FLOW_FAMILIES)

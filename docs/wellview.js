@@ -57,6 +57,21 @@ function mix(a, b, k) {
 }
 
 /**
+ * One drop of what the well is producing, picked at random: water against oil by the water cut,
+ * and gas as well wherever there is free gas to see.  At the perforations there is only when the
+ * reservoir itself is below its bubble point, which is what freeGasIn says.  By the time the
+ * stream turns out of the tee it has fallen to flowline pressure, so the solution gas has come
+ * out of the oil on the way up whatever the reservoir was doing.
+ * @param {WellSpec} s @param {boolean} [surface] @returns {string}
+ */
+function phaseIn(s, surface = false) {
+  const share = surface ? clamp(0.12 + s.gor / 20000, 0, 0.45)
+    : s.freeGasIn ? clamp(0.08 + s.gor / 16000, 0, 0.35) : 0;
+  if (Math.random() < share) return PHASE_COLOURS.gas;
+  return Math.random() < clamp(s.water_cut, 0, 1) ? PHASE_COLOURS.water : PHASE_COLOURS.oil;
+}
+
+/**
  * @typedef {object} WellSpec
  * @property {number[]} md          survey measured depths, ft, starting at 0
  * @property {number[]} tvd         survey true vertical depths, ft
@@ -77,6 +92,8 @@ function mix(a, b, k) {
  * @property {number} [padTop]      pixels above TVD = 0, to match the chart beside it
  * @property {number} [padBottom]   pixels below the deepest TVD, likewise
  * @property {boolean} [depthAxis]  draw the depth scale down the left; on unless turned off
+ * @property {boolean} [freeGasIn]  gas breaks out in the reservoir itself, so it arrives at the
+ *                                  perforations as free gas rather than all in solution
  * @property {boolean} [masterOpen] whether the master valves are drawn open
  * @property {boolean} [chokeOpen]  whether the production wing valve is drawn open
  */
@@ -315,10 +332,13 @@ export function render(svg, spec) {
   // ---- the fluid in the tubing ----
   // It stops at the swab valve, which is shut: nothing stands in the pipe above it.
   const toShoe = segment(topMd, spec.shoe_md);
-  // cleared to white first: the annulus is laid down full width behind it, and a see-through
-  // liquid colour over the lift gas came out olive
+  // Cleared to white first: the annulus is laid down full width behind it, and a see-through
+  // liquid colour over the lift gas came out olive.  The wash over it is the LIQUID standing in
+  // the pipe, tinted between oil and water by the water cut - it used to be oil green at 0.38,
+  // which left the oil moving up through it invisible against its own background.
+  const liquidTint = mix(PHASE_COLOURS.oil, PHASE_COLOURS.water, clamp(spec.water_cut, 0, 1));
   stroke(toShoe, bore, "#ffffff");
-  stroke(toShoe, bore, PHASE_COLOURS.oil, { id: "wv-bore", opacity: 0.38 });
+  stroke(toShoe, bore, liquidTint, { id: "wv-bore", opacity: 0.13 });
 
   // ---- the flow regimes, drawn rather than tinted ----
   /** @type {{from: number, to: number, family: string, regime: string, px: number,
@@ -446,14 +466,9 @@ export function render(svg, spec) {
   }
 
   // ---- the open tubing tailpipe, ending at the top of the perforations ----
+  // Nothing is drawn across the end: the tubing is open, and a stub either side read as a shoe
+  // closing it off.
   const shoePt = at(spec.shoe_md);
-  const shoeN = normalAt(spec.shoe_md);
-  for (const side of [-1, 1]) {
-    tip(svg.appendChild(node("path", {
-      d: `M${shoePt[0] + shoeN[0] * side * rTubing},${shoePt[1] + shoeN[1] * side * rTubing} `
-         + `l${shoeN[0] * side * 6},${shoeN[1] * side * 6}`,
-      stroke: INK, "stroke-width": 3, "stroke-linecap": "round" })), "Open tubing tailpipe");
-  }
 
   // ---- the perforations: horizontal, through both walls, stopping short of the shoe ----
   /** @type {{x: number, y: number, nx: number, ny: number}[]} */
@@ -542,11 +557,11 @@ export function render(svg, spec) {
     }
     svg.appendChild(valveSymbol(outX - wingDir * (wingRoom - 10) * 0.42, INLET_Y, "wv-annwing",
                                 glOn, "Annulus wing valve: lift gas into the annulus"));
-    // hard against the left edge, above the line: anywhere nearer the well and it ran into the
-    // annulus seal
-    svg.appendChild(node("text", { x: wingDir < 0 ? 4 : W - 4, y: INLET_Y - 13,
+    // Over the inlet it names, running outwards from the casing wall: out at the panel edge it
+    // was a caption with a lot of white between it and the thing it labelled.
+    svg.appendChild(node("text", { x: tipX + wingDir * 10, y: INLET_Y - 14,
                                    class: "wv-lbl", fill: glOn ? "#8a5a00" : "#64748b",
-                                   "text-anchor": wingDir < 0 ? "start" : "end" },
+                                   "text-anchor": wingDir < 0 ? "end" : "start" },
                                  glOn ? "lift gas in: ON" : "lift gas in: OFF"));
 
     // the tee and the flowline out of it
@@ -727,17 +742,28 @@ export function animate(view) {
         add("bubble", () => node("circle", { r: bore * 0.06, fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.8 }),
             n, 1);
       }
-      // the water riding in the liquid, in proportion to the water cut
-      if (band.family !== "annular" && band.family !== "gas" && s.water_cut > 0.02) {
-        const n = clamp(Math.round(px / 26 * s.water_cut * 2.2), 1, 14);
-        add("water", () => node("circle", { r: 2 + Math.random() * 1.2,
-                                            fill: PHASE_COLOURS.water, opacity: 0.95 }), n, 0.9);
+      // The liquid riding up with the gas, split between oil and water by the water cut.  Both
+      // are drawn: oil used to be the colour of the pipe's background and nothing else, so it was
+      // the one phase on the page that never appeared to move.
+      if (band.family !== "annular" && band.family !== "gas") {
+        const liquid = clamp(Math.round(px / 24), 2, 18);
+        const nWater = Math.round(liquid * clamp(s.water_cut, 0, 1));
+        const nOil = liquid - nWater;
+        if (nOil > 0) {
+          add("oil", () => node("circle", { r: 2.1 + Math.random() * 1.2,
+                                            fill: PHASE_COLOURS.oil, opacity: 0.95 }), nOil, 0.92);
+        }
+        if (nWater > 0) {
+          add("water", () => node("circle", { r: 2 + Math.random() * 1.2,
+                                              fill: PHASE_COLOURS.water, opacity: 0.95 }),
+              nWater, 0.9);
+        }
       }
     }
     // where across the bore each one sits
     for (const r of risers) {
       const room = r.tag === "taylor" || r.tag === "churn" || r.tag === "froth" ? 0.06
-        : r.tag === "mist" ? 0.24 : 0.3;
+        : r.tag === "mist" ? 0.24 : r.tag === "oil" || r.tag === "water" ? 0.34 : 0.3;
       r.across = (Math.random() - 0.5) * scene.bore * room * 2;
     }
 
@@ -753,23 +779,22 @@ export function animate(view) {
 
     // the fluid coming in through the perforations and turning up into the tailpipe
     inflow = [];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 16; i++) {
       const perf = scene.perfs[i % scene.perfs.length];
-      const c = node("circle", { r: 2.4 + Math.random() * 0.9,
-                                 fill: Math.random() < s.water_cut
-                                   ? PHASE_COLOURS.water : PHASE_COLOURS.oil });
+      const c = node("circle", { r: 2.4 + Math.random() * 0.9, fill: phaseIn(s) });
       inHost.appendChild(c);
       inflow.push({ perf, t: Math.random(), speedScale: 0.6 + Math.random() * 0.8, node: c });
     }
 
     // and the flow out along the wing arm
+    // Out along the wing arm.  What turns the corner at the tee is whatever came up the tubing,
+    // so the arm carries the same three phases rather than oil on its own.
     armFlow = [];
     if (scene.arm) {
-      const shallow = scene.bands[0];
-            for (let i = 0; i < 6; i++) {
-        const c = node("circle", { r: 2.6, fill: PHASE_COLOURS.oil });
+      for (let i = 0; i < 9; i++) {
+        const c = node("circle", { r: 2.6, class: "wv-arm", fill: phaseIn(s, true) });
         host.appendChild(c);
-        armFlow.push({ u: i / 6, node: c });
+        armFlow.push({ u: i / 9, node: c });
       }
     }
   }

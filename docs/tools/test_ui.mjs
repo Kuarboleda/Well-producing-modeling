@@ -169,6 +169,12 @@ await phone.close();
 // ---------------------------------------------------------------------
 // The five correlations that work out a flow pattern; the other three say so instead of guessing.
 const PATTERN_ONES = ["beggs_brill", "orkiszewski", "duns_ros", "ansari", "mukherjee_brill"];
+/** @param {string} id @param {string} v */
+const setVal = (id, v) => page.$eval(`#${id}`, (n, v) => {
+  /** @type {HTMLInputElement} */ (n).value = v;
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+  n.dispatchEvent(new Event("change", { bubbles: true }));
+}, v);
 const calc = async () => { await page.click("#btn-calc");
   await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate",
                              null, { timeout: 60000 });
@@ -263,7 +269,7 @@ const tips = () => page.$$eval("#flow-svg title", (ns) => ns.map((n) => n.textCo
 const parts = await tips();
 for (const want of ["Swab valve", "Production wing valve", "Upper master valve",
                     "Lower master valve", "Wellhead annulus seal", "Production casing",
-                    "Production tubing", "Production packer", "Open tubing tailpipe",
+                    "Production tubing", "Production packer",
                     "Perforations", "Casing shoe", "Reservoir"]) {
   check(`hovering names the ${want.toLowerCase()}`,
         parts.some((s) => s.startsWith(want)), parts.join(" | "));
@@ -443,6 +449,42 @@ check("every regime interval says what it is on hover",
         && ns.every((n) => /flow, [\d,]+-[\d,]+ /.test(n.textContent))),
       (await page.$$eval("#flow-svg .wv-hit title", (ns) => ns.slice(0, 2).map((n) => n.textContent)))
         .join(" | "));
+
+// ---- every phase the well is making is something that MOVES ----
+// Oil used to be the colour the pipe was tinted and nothing else, so on a page where the gas and
+// the water were visibly travelling it was the one phase that appeared to stand still.
+const phases = await page.evaluate(() => {
+  const fills = (sel) => [...document.querySelectorAll(sel)].map((n) => n.getAttribute("fill"));
+  return { tubing: fills("#wv-fluid circle:not(.wv-arm)"), inflow: fills("#wv-inflow circle"),
+           arm: fills("#wv-fluid circle.wv-arm"),
+           wash: document.querySelector("#wv-bore").getAttribute("stroke"),
+           washOpacity: Number(document.querySelector("#wv-bore").getAttribute("opacity")) };
+});
+check("oil is drawn travelling up the tubing, not only as the colour behind everything",
+      phases.tubing.filter((f) => f === "#22c55e").length >= 4,
+      phases.tubing.join(" "));
+check("water is travelling with it", phases.tubing.filter((f) => f === "#3b82f6").length >= 2);
+// and the wash behind them is the liquid in the pipe, pale enough to see the oil against
+check("the wash in the bore is neither oil nor water, and is pale",
+      phases.wash !== "#22c55e" && phases.wash !== "#3b82f6" && phases.washOpacity < 0.2,
+      `${phases.wash} at ${phases.washOpacity}`);
+// what arrives at the perforations: with the reservoir above its bubble point the gas is still in
+// solution, so nothing red should be coming in through them
+check("above the bubble point no free gas comes in through the perforations",
+      phases.inflow.length > 0 && !phases.inflow.includes("#ef4444"), phases.inflow.join(" "));
+// what turns the corner at the tee is whatever came up the pipe, so the flowline is not oil alone
+check("the flowline out of the tee carries the mixture, not just oil",
+      phases.arm.length > 2 && new Set(phases.arm).size > 1, phases.arm.join(" "));
+
+// and below the bubble point the gas is already out of solution in the rock, so it arrives free
+await setVal("p_res", "1800");
+await page.waitForTimeout(250);
+await calc();
+check("below the bubble point free gas does come in through the perforations",
+      await page.$$eval("#wv-inflow circle", (ns) => ns.some((n) => n.getAttribute("fill") === "#ef4444")));
+await setVal("p_res", "3000");
+await page.waitForTimeout(250);
+await calc();
 
 // The depth scales of the two panels must line up: a depth on the profile has to be at the same
 // height on the drawing beside it, which is the whole reason they share a top and bottom padding.
