@@ -167,11 +167,14 @@ export function render(svg, spec) {
   const glMd = glOn ? Number(spec.gl_md) : 0;
   const wingRoom = tree && !compact ? clamp(W * 0.17, 48, 86) : 20;
 
-  // How fat to draw the completion.  The casing is not an input, so it is a fixed width scaled to
-  // fill the panel; the TUBING is an input, so it scales with the size that was typed - a 4 1/2"
-  // string visibly fills more of the annulus than a 2 7/8" one, which is the point of drawing it.
-  const girth = compact ? 1
-    : clamp((W - pad.l - pad.r - 2 * wingRoom) / 114, 0.75, 1.9);
+  // How fat to draw the completion.
+  //
+  // It barely grows with the panel, and stops growing altogether past a point.  Sized to FILL the
+  // width it came out nearly twice this on a wide monitor, which is not what a wellbore looks
+  // like: a well is a slim thing in a lot of rock, and the extra width belongs to the margins.
+  // The casing is not an input, so it is a fixed width; the TUBING is, so it scales with the size
+  // that was typed - a 4 1/2" string visibly fills more of the annulus than a 2 7/8" one.
+  const girth = compact ? 1 : clamp(W / 400, 0.72, 1.1);
   const rCasing = 57 * girth;
   const half0 = Math.min(13 + (spec.tubing_id - 2) * 2.2, 22);
   const rTubing = clamp(half0 * 1.383 * girth, 12 * girth, rCasing - 20 * girth);
@@ -181,8 +184,8 @@ export function render(svg, spec) {
   const usableH = H - pad.t - pad.b;
   const scaleY = usableH / maxTvd;
   const scaleX = maxReach > 1 ? Math.min(usableW / maxReach, scaleY) : scaleY;
-  // placed so the lift gas line has room on the left and the formation frames the well
-  const x0 = pad.l + wingRoom + rCasing;
+  // Centred in the panel, but never so far left that the lift gas line runs off the edge.
+  const x0 = Math.max(pad.l + wingRoom + rCasing, (pad.l + W - pad.r) / 2);
   const X = (/** @type {number} */ r) => x0 + r * scaleX;
   const Y = (/** @type {number} */ d) => pad.t + d * scaleY;
   const ground = Y(0);
