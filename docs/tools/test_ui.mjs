@@ -562,6 +562,31 @@ check("nothing is drawn above the tee, where the swab valve is shut", tree.above
       `${tree.aboveTee} shapes`);
 check("the tree valves are painted over the fluid, not under it",
       tree.valvesLast === "wv-tree-valves", tree.valvesLast);
+// A Taylor bubble is as wide as the bore, so the mask cutting one off square at the tee read as a
+// red block in the wellhead.  The big shapes fade out over the last stretch instead.
+let faded = false;
+for (let frame = 0; frame < 12 && !faded; frame++) {
+  await page.waitForTimeout(150);
+  faded = await page.$$eval("#wv-fluid path[data-gas]",
+    (ns) => ns.some((n) => Number(n.getAttribute("opacity")) < 0.5));
+}
+check("and a gas shape fades out as it leaves the well rather than being cut off square", faded);
+// the sump below the packer and the reservoir are the same wash as the tubing: one stream, not
+// four fluids, and it follows the water cut like the rest
+check("the fluid below the packer is the same wash as the tubing",
+      await page.evaluate(() => {
+        const bore = document.querySelector("#wv-bore");
+        const sump = document.querySelector("#wv-rathole");
+        return !!bore && !!sump && bore.getAttribute("stroke") === sump.getAttribute("stroke")
+          && bore.getAttribute("opacity") === sump.getAttribute("opacity");
+      }));
+// the casing wall has to reach the shoe, or the shoe triangles stand on nothing
+check("the casing wall runs down past the perforations to the shoe",
+      await page.evaluate(() => {
+        const wall = document.querySelector("path.wv-casing")?.getBoundingClientRect();
+        const shoe = document.querySelector("polygon.wv-shoe")?.getBoundingClientRect();
+        return !!wall && !!shoe && wall.bottom >= shoe.bottom - 2;
+      }));
 check("the flowline is the same pale wash as the tubing", Number(tree.armFill) < 0.2,
       String(tree.armFill));
 check("and nothing leaves the pipe before the outlet arrow", tree.outside === 0,

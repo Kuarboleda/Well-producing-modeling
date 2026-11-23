@@ -356,6 +356,10 @@ export function render(svg, spec) {
   // The standing fluid is washed in rather than laid on: a pure blue at full strength reads as a
   // painted bar, and what is wanted is a column of brine you can see the casing wall through.
   const annTop = tree ? (SEAL_Y - ground) / scaleY : 0;
+  // The LIQUID in the well, shaded between oil and water by the water cut.  Everything that holds
+  // the produced liquid is washed in it at the same strength - the tubing, the sump below the
+  // packer, the reservoir, the flowline - so they read as one stream rather than four fluids.
+  const liquidTint = mix(PHASE_COLOURS.oil, PHASE_COLOURS.water, clamp(spec.water_cut, 0, 1));
   const annWidth = 2 * rCasing;      // laid down full width; the tubing fluid covers the middle
   if (glOn) {
     tip(stroke(segment(annTop, glMd), annWidth, PHASE_COLOURS.liftGas, { id: "wv-anngas" }),
@@ -368,20 +372,20 @@ export function render(svg, spec) {
                { id: "wv-anndead", opacity: 0.3 }),
         "Dead completion fluid: no gas is being injected");
   }
-  tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, PHASE_COLOURS.oil,
-             { id: "wv-rathole", opacity: 0.22 }), "Reservoir fluid, below the packer");
+  // The same wash as the tubing, and for the same reason: it is the same liquid, shaded between
+  // oil and water by the water cut.  It was oil green whatever the well was making, which made
+  // the sump a different fluid from the stream coming out of it.
+  tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, liquidTint,
+             { id: "wv-rathole", opacity: 0.13 }), "Reservoir fluid, below the packer");
   svg.appendChild(node("rect", { x: at(perf_md)[0] - rCasing, y: Y(maxTvd),
                                  width: 2 * rCasing, height: Math.min(pad.b - 14, 42),
-                                 fill: PHASE_COLOURS.oil, opacity: 0.22 }));
+                                 fill: liquidTint, opacity: 0.13 }));
 
   // ---- the fluid in the tubing ----
   // It stops at the swab valve, which is shut: nothing stands in the pipe above it.
   const toShoe = segment(topMd, spec.shoe_md);
   // Cleared to white first: the annulus is laid down full width behind it, and a see-through
-  // liquid colour over the lift gas came out olive.  The wash over it is the LIQUID standing in
-  // the pipe, tinted between oil and water by the water cut - it used to be oil green at 0.38,
-  // which left the oil moving up through it invisible against its own background.
-  const liquidTint = mix(PHASE_COLOURS.oil, PHASE_COLOURS.water, clamp(spec.water_cut, 0, 1));
+  // liquid colour over the lift gas came out olive.
   stroke(toShoe, bore, "#ffffff");
   stroke(toShoe, bore, liquidTint, { id: "wv-bore", opacity: 0.13 });
 
@@ -479,6 +483,10 @@ export function render(svg, spec) {
       const n = normalAt(spec.md[i]);
       return [points[i][0] + n[0] * s * rCasing, points[i][1] + n[1] * s * rCasing];
     });
+    // Down through the perforated interval to the shoe, which is below the depth scale.  This
+    // used to be added AFTER the path was built from `cas`, so it did nothing: the wall stopped
+    // at the top of the perforations and the shoe triangles stood on nothing.
+    cas.push([cas[cas.length - 1][0], payBot]);
     // Up to the TOP EDGE of the annulus seal, not its centre line: the seal is a block across the
     // annulus and wants the casing closed over it, the way a tubing hanger sits inside the
     // wellhead housing rather than poking out of the top of it.
@@ -497,8 +505,6 @@ export function render(svg, spec) {
     const endP = at(spec.shoe_md);
     const endN = normalAt(spec.shoe_md);
     tub.push([endP[0] + endN[0] * s * rTubing, endP[1] + endN[1] * s * rTubing]);
-    // the casing runs on down through the perforated interval, which is below the depth scale
-    cas.push([cas[cas.length - 1][0], payBot]);
     const nCap = normalAt(topMd);
     const capP = [bx + nCap[0] * s * rTubing, CAP_Y];
     tip(svg.appendChild(node("path", { class: "wv-tubing",
@@ -643,14 +649,16 @@ export function render(svg, spec) {
     // the tee and the flowline out of it
     const armH = Math.min(bore * 1.3, 34);
     const grey = { fill: "#d7dde3", stroke: "#8d9aa8", "stroke-width": 1.4 };
-    tip(svg.appendChild(node("rect", { x: bx + rTubing - 1, y: TEE_Y - armH / 2,
-                                       width: armEnd - bx - rTubing, height: armH, ...grey })),
+    tip(svg.appendChild(node("rect", { x: bx + rTubing + 1.6, y: TEE_Y - armH / 2,
+                                       width: armEnd - bx - rTubing - 1.6, height: armH, ...grey })),
         "Flowline");
     // The same pale wash as the bore, because it is the same stream: it was a darker, more
     // saturated box, which read as a different fluid sitting in the flowline.
     const armBore = Math.min(bore * 0.72, 30);
-    const armRect = { x: bx - rTubing, y: TEE_Y - armBore / 2,
-                      width: armEnd - bx + rTubing - 2, height: armBore };
+    // Clear of the black tubing walls on both sides: starting ON the left wall painted over its
+    // inner half and thinned it, and the grey flowline overlapped the right one.
+    const armRect = { x: bx - rTubing + 1.6, y: TEE_Y - armBore / 2,
+                      width: armEnd - bx + rTubing - 3.6, height: armBore };
     svg.appendChild(node("rect", { ...armRect, fill: "#ffffff" }));
     svg.appendChild(node("rect", { id: "wv-armbore", ...armRect,
                                    fill: liquidTint, opacity: 0.13 }));
@@ -732,7 +740,10 @@ export function render(svg, spec) {
   svg.appendChild(node("g", { id: "wv-jet", mask: "url(#wv-inside)" }));
   if (treeValves) svg.appendChild(treeValves);
 
-  return { svg, spec, bands, perfs, shoePt, glCentre, glMd, glOn, liftSide, annTop,
+  // how much measured depth is worth 46 pixels, for fading a shape out as it leaves the well
+  const fadeTop = scaleY > 0 ? 46 / scaleY : 0;
+
+  return { svg, spec, bands, perfs, shoePt, glCentre, glMd, glOn, liftSide, annTop, fadeTop,
            bore, wTubing: 2 * rTubing, wAnnulus: 2 * rCasing, at, normalAt, tiltAt, topMd,
            families, girth, arm: armOut, gasAt };
 }
@@ -968,7 +979,8 @@ export function animate(view) {
       const off = r.across + sway;
       const x = p[0] + n[0] * off;
       const y = p[1] + n[1] * off;
-      if (r.tag === "taylor" || r.tag === "churn" || r.tag === "froth") {
+      const big = r.tag === "taylor" || r.tag === "churn" || r.tag === "froth";
+      if (big) {
         const wob = r.tag === "churn" ? 1 + Math.sin(r.wobble) * 0.09 : 1;
         r.node.setAttribute("transform",
           `translate(${x.toFixed(2)},${y.toFixed(2)}) rotate(${scene.tiltAt(md).toFixed(1)}) `
@@ -980,7 +992,16 @@ export function animate(view) {
       // The big gas shapes are carried lighter than the drops: a Taylor bubble is most of the
       // bore, and a solid red block that size shouts over everything else on the page.  A shape
       // chooses its own opacity when it is built; this only dims the lot when the well is shut.
-      r.node.setAttribute("opacity", s.flowing ? String(r.shade) : "0.35");
+      //
+      // And a big shape fades out over the last stretch before it leaves the well, rather than
+      // being cut off square by the mask at the tee: a Taylor bubble is as wide as the bore, so
+      // the straight edge the mask left behind the master valve read as a red block sitting in
+      // the wellhead rather than as a bubble on its way out.
+      let shade = r.shade;
+      if (big && scene.fadeTop > 0) {
+        shade *= clamp((md - top) / scene.fadeTop, 0, 1);
+      }
+      r.node.setAttribute("opacity", s.flowing ? shade.toFixed(3) : "0.35");
     }
 
     // the jet through the gas lift valve: out of the valve, across into the bore, and away up it
