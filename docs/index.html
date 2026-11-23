@@ -227,6 +227,9 @@
      deepest point at the same height in it as in the profile, so a depth lines up across the two */
   .charts.three > #flow-well { grid-area: 1 / 3 / 4 / 4; align-self: stretch; height: auto; }
   .charts.three > .flowcol { grid-area: 4 / 3 / 5 / 4; }
+  /* it describes the traverse the two plots are drawn from, so it sits under them rather than
+     running the whole width and under a drawing it says nothing about */
+  .charts.three > .caption { grid-area: 4 / 1 / 5 / 3; margin-top: 2px; }
   .chart { width: 100%; height: 640px; }
 
   /* ---- windows: work that belongs to a section but would swamp the panel ---- */
@@ -338,7 +341,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 23 Nov 2026 21:23 (local)</span>
+  <span class="sub build" id="build">build 23 Nov 2026 21:45 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -882,12 +885,12 @@ backpressure 3100 0 0.012 0.85 5 2</textarea>
           <svg id="flow-svg" data-w="420" data-h="520" preserveAspectRatio="xMidYMid meet" role="img"
                aria-label="The well from the tubing head to the perforations, with the fluid flowing"></svg>
         </div>
+        <p class="caption" id="profile-note"></p>
         <div class="flowcol">
           <p class="state" id="well-state"></p>
           <div id="flow-legend" class="flow-legend"></div>
         </div>
       </div>
-      <p class="caption" id="profile-note"></p>
       <ul class="results small" id="extras"></ul>
       <details class="more">
         <summary>The inflow curve as numbers</summary>

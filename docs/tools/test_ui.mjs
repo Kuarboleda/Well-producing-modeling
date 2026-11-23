@@ -298,9 +298,9 @@ for (const want of ["Swab valve", "Production wing valve", "Upper master valve",
   check(`hovering names the ${want.toLowerCase()}`,
         parts.some((s) => s.startsWith(want)), parts.join(" | "));
 }
-check("the only text on the drawing is the depth scale and the lift gas inlet",
+check("the only text on the drawing is the lift gas inlet and the three pressures",
       (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
-        .every((s) => s.startsWith("Lift gas")));
+        .every((s) => /^(Lift gas|Pr = |Pwf = |FTHP = )/.test(String(s))));
 check("the fluid is drawn as particles",
       (await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.length)) > 20);
 check("fluid enters through the perforations",
@@ -550,7 +550,10 @@ const tree = await page.evaluate(() => {
   const fluid = [...document.querySelectorAll("#wv-fluid > *")];
   return {
     aboveTee: fluid.filter((n) => n.getBoundingClientRect().bottom < (wing?.top ?? 0) - 2).length,
-    valvesLast: kids[kids.length - 1].id,
+    // the fluid, then the valves over it, then the pressure labels over everything
+    order: [kids.findIndex((n) => n.id === "wv-fluid"),
+            kids.findIndex((n) => n.id === "wv-tree-valves"),
+            kids.findIndex((n) => (n.textContent || "").startsWith("Pwf"))],
     armFill: document.querySelector("#wv-armbore")?.getAttribute("opacity"),
     outside: fluid.filter((n) => {
       const arrow = document.querySelector("#wv-outflow")?.getBoundingClientRect();
@@ -560,8 +563,10 @@ const tree = await page.evaluate(() => {
 });
 check("nothing is drawn above the tee, where the swab valve is shut", tree.aboveTee === 0,
       `${tree.aboveTee} shapes`);
-check("the tree valves are painted over the fluid, not under it",
-      tree.valvesLast === "wv-tree-valves", tree.valvesLast);
+check("the tree valves are painted over the fluid, and the pressures over them",
+      tree.order.every((i) => i >= 0)
+      && tree.order[0] < tree.order[1] && tree.order[1] < tree.order[2],
+      tree.order.join(" then "));
 // A Taylor bubble is as wide as the bore, so the mask cutting one off square at the tee read as a
 // red block in the wellhead.  The big shapes fade out over the last stretch instead.
 let faded = false;
@@ -722,9 +727,41 @@ check("nothing is left in a list beside the drawing",
 check("the model's own numbers are under the charts",
       (await page.$eval("#extras", (n) => n.innerText)).toUpperCase().includes("BUBBLE POINT"),
       await page.$eval("#extras", (n) => n.innerText));
-check("a line says what the well is doing",
-      (await page.$eval("#well-state", (n) => n.innerText)).includes("Flowing"),
+// A well flowing naturally gets no line: the drawdown was all it ever said and that is in the
+// strip of rates at the top.  Gas lift still earns one, because how much is going in and how deep
+// is not anywhere else on the page.
+check("a well flowing naturally says nothing under the drawing",
+      (await page.$eval("#well-state", (n) => n.innerText)).trim() === "",
       await page.$eval("#well-state", (n) => n.innerText));
+// and the three pressures a well is read by are written where each one is measured
+const said = await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent || ""));
+for (const want of ["Pr = ", "Pwf = ", "FTHP = "]) {
+  check(`${want.trim()} is written on the drawing`, said.some((s) => s.startsWith(want)),
+        said.join(" | "));
+}
+const pressureUnit = await page.$eval('[data-unit="pressure"]', (n) => n.textContent || "");
+check("each of them carries the unit the page is in",
+      said.filter((s) => /^(Pr|Pwf|FTHP) = /.test(s)).length === 3
+      && said.filter((s) => /^(Pr|Pwf|FTHP) = /.test(s))
+        .every((s) => s.endsWith(pressureUnit.replace(/[()]/g, ""))),
+      `${said.join(" | ")} against ${pressureUnit}`);
+// the pill behind the flowing pressure is sized from the text, not guessed from its length
+check("the flowing pressure has something behind it, so the inflow cannot swallow it",
+      await page.evaluate(() => {
+        const label = [...document.querySelectorAll("#flow-svg text.wv-lbl")]
+          .find((n) => (n.textContent || "").startsWith("Pwf"));
+        const pill = label && label.previousElementSibling;
+        if (!label || !pill || pill.tagName !== "rect") return false;
+        const a = label.getBoundingClientRect(), b = pill.getBoundingClientRect();
+        return b.left < a.left && b.right > a.right;
+      }));
+// and the summary of the traverse sits under the two plots it describes, not across the drawing
+check("the operating summary stops short of the drawing",
+      await page.evaluate(() => {
+        const note = document.querySelector("#profile-note")?.getBoundingClientRect();
+        const well = document.querySelector("#flow-well")?.getBoundingClientRect();
+        return !!note && !!well && note.right <= well.left + 1;
+      }));
 
 // ---- the three columns fit, and nothing overflows ----
 await page.setViewportSize({ width: 1600, height: 900 });

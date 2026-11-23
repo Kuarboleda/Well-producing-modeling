@@ -325,6 +325,7 @@ function switchSystem(name) {
  *            fluid: vlp.OilWaterFluid | vlp.GasFluid, ipr_name: string,
  *            ipr_inputs: Record<string, any>, p_res: number, p_wh: number, correlation: string,
  *            mix?: Record<string, number>,
+ *            callouts?: {pr: string, pwf: string, fthp: string},
  *            max_step_ft: number, gravity_mult: number, friction_mult: number,
  *            rateUnit: "liquidRate"|"gasRate", perf_md: number,
  *            gas_lift: {rate: number, md: number, sg: number, p_inj: number} | null,
@@ -1288,15 +1289,20 @@ function runNodal() {
   // what the commingled layers actually produce at this rate, so the drawing shows that mixture
   // rather than the one typed into the PVT panel
   c.mix = res.mix;
+  // the three pressures the drawing writes in place, from the solution rather than from whichever
+  // traverse the flow pattern was borrowed from
+  const atP = (/** @type {number} */ x) =>
+    `${show(units.fromEngine("pressure", x), 0)} ${units.unitOf("pressure")}`;
+  c.callouts = { pr: atP(c.p_res), pwf: atP(/** @type {number} */ (res.pwf)), fthp: atP(c.p_wh) };
   drawWell(c, patternTr, /** @type {number} */ (res.q), patternFrom, borrowed);
-  const drawdown = show(units.fromEngine("pressureDiff",
-                                         c.p_res - /** @type {number} */ (res.pwf)), 0);
+  // Nothing for a well flowing naturally: the drawdown was the only thing this said, and it is
+  // in the strip of rates at the top of the page.  Gas lift still earns a line, because how much
+  // is going in and how deep is not anywhere else.
   wellState(c.gas_lift
     ? `Flowing on gas lift: ${show(units.fromEngine("gasRate", c.gas_lift.rate), 0)} `
       + `${units.unitOf("gasRate")} injected at `
-      + `${show(units.fromEngine("length", c.gas_lift.md), 0)} ${units.unitOf("length")}. `
-      + `Drawdown ${drawdown} ${units.unitOf("pressureDiff")}.`
-    : `Flowing naturally. Drawdown ${drawdown} ${units.unitOf("pressureDiff")}.`);
+      + `${show(units.fromEngine("length", c.gas_lift.md), 0)} ${units.unitOf("length")}.`
+    : "");
 
   const lengthLabel = units.unitOf("length");
   const tempLabel = units.unitOf("temperature");
@@ -1612,6 +1618,11 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     lengthUnit: units.unitOf("length"),
     toShown: (ft) => units.fromEngine("length", ft),
     pattern: tr ? { md: tr.md, regime: tr.regime } : null,
+    // The three pressures a well is read by, each put where it is actually measured.  They come
+    // from the solution, which solveNow puts on the case: the traverse passed in here is the one
+    // the FLOW PATTERN came from, and that can be a different correlation, reporting a flowing
+    // pressure a hundred psi away from the operating point the rest of the page shows.
+    callouts: c.callouts ?? null,
     // Where the pressure down the tubing crosses the bubble point: above it the gas is out of
     // solution and there is something to draw, below it the oil is undersaturated and there is
     // not.  Read off the same traverse the profile beside the drawing is plotted from, so the

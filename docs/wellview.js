@@ -113,6 +113,8 @@ function phaseMix(s, n, surface = false) {
  * @property {boolean} [depthAxis]  draw the depth scale down the left; on unless turned off
  * @property {boolean} [freeGasIn]  gas breaks out in the reservoir itself, so it arrives at the
  *                                  perforations as free gas rather than all in solution
+ * @property {{pr: string, pwf: string, fthp: string}|null} [callouts] the three pressures a well
+ *                                  is read by, ready formatted, to write where each is measured
  * @property {number|null} [bubbleMd] the depth where the flowing pressure crosses the bubble
  *                                  point, below which the oil is undersaturated and there is no
  *                                  free gas to draw; null when it never crosses
@@ -345,10 +347,22 @@ export function render(svg, spec) {
   // drawn either side of the hole and not behind it.
   const payTop = Y(maxTvd);
   const payBot = payTop + Math.min(pad.b - 14, 42);
+  // Room for the reservoir pressure to be written in, without running off the panel.
+  const payW = Math.max(Math.min(75, Math.min(bx - rCasing - pad.l, W - pad.r - bx - rCasing)), 18);
+  for (const [id, x1] of [["wv-pay-l", "100%"], ["wv-pay-r", "0%"]]) {
+    const g = node("linearGradient", { id, x1, y1: "0%", x2: x1 === "0%" ? "100%" : "0%", y2: "0%" });
+    g.appendChild(node("stop", { offset: "0%", "stop-color": "#b98a5a", "stop-opacity": "0.42" }));
+    g.appendChild(node("stop", { offset: "62%", "stop-color": "#b98a5a", "stop-opacity": "0.34" }));
+    g.appendChild(node("stop", { offset: "100%", "stop-color": "#b98a5a", "stop-opacity": "0" }));
+    defs.appendChild(g);
+  }
   for (const s of [-1, 1]) {
+    // Wide enough to write the reservoir pressure on, and faded out at the far edge, because the
+    // formation does not stop there - the block is a window into it, not a box of sand.
     tip(svg.appendChild(node("rect", { class: "wv-pay",
-      x: s < 0 ? bx - rCasing - 30 : bx + rCasing, y: payTop,
-      width: 30, height: Math.max(payBot - payTop, 3), fill: "#b98a5a", opacity: 0.4 })),
+      x: s < 0 ? Math.max(bx - rCasing - payW, pad.l) : bx + rCasing, y: payTop,
+      width: payW, height: Math.max(payBot - payTop, 3),
+      fill: `url(#wv-pay-${s < 0 ? "l" : "r"})` })),
       "Reservoir: the perforated interval, below the top perforation depth");
   }
 
@@ -739,6 +753,50 @@ export function render(svg, spec) {
   svg.appendChild(node("g", { id: "wv-fluid", mask: "url(#wv-inside)" }));
   svg.appendChild(node("g", { id: "wv-jet", mask: "url(#wv-inside)" }));
   if (treeValves) svg.appendChild(treeValves);
+
+  // ---- the three pressures a well is read by, each where it is measured ----
+  //
+  // Pr in the rock, Pwf at the sandface, FTHP at the wellhead.  They are the same quiet grey as
+  // the lift gas label - the drawing is the subject, these are notes on it - and they go on last
+  // so the moving fluid never runs across a number.  The one in the sump has a pill behind it,
+  // because that is the one place where something IS moving over it.
+  if (spec.callouts) {
+    /**
+     * A white halo carries a label over whatever is behind it; a pill is used where something is
+     * MOVING behind it, and is measured off the text rather than guessed from its length, which
+     * left the words hanging out of both ends of it.
+     * @param {number} x @param {number} y @param {string} text @param {string} anchor
+     * @param {boolean} [pill]
+     */
+    const callout = (x, y, text, anchor, pill = false) => {
+      const label = node("text", {
+        x, y, class: "wv-lbl", fill: "#64748b", "text-anchor": anchor,
+        ...(pill ? {} : { stroke: "#ffffff", "stroke-width": 3, "paint-order": "stroke fill" }),
+      }, text);
+      svg.appendChild(label);
+      if (!pill) return;
+      let box = { x: x - 48, y: y - 9, width: 96, height: 13 };
+      try {
+        const got = /** @type {SVGGraphicsElement} */ (/** @type {unknown} */ (label)).getBBox();
+        if (got.width > 1) box = got;
+      } catch { /* not laid out yet: the guess above will do */ }
+      svg.insertBefore(node("rect", { x: box.x - 5, y: box.y - 1.5, width: box.width + 10,
+                                      height: box.height + 3, rx: (box.height + 3) / 2,
+                                      fill: "#ffffff", opacity: 0.82 }), label);
+    };
+    // In the rock, over the block it belongs to.  Not ON it: the block is only as wide as the
+    // formation showing beside the well, and the perforation tunnels cross most of that.
+    callout(at(perf_md)[0] - rCasing - 6, payTop - 7, `Pr = ${spec.callouts.pr}`, "end");
+    // At the sandface, across the perforated interval, which is where the pressure it names is
+    // measured.  Inside the casing, where the only thing moving is what is coming in.
+    callout(at(perf_md)[0], (payTop + perfBotY) / 2 + 4, `Pwf = ${spec.callouts.pwf}`,
+            "middle", true);
+    // At surface, in the open above the flowline and to the right of the swab.
+    if (tree) {
+      callout(bx + rTubing + 10, TEE_Y - Math.min(bore * 1.3, 34) / 2 - 8,
+              `FTHP = ${spec.callouts.fthp}`, "start");
+    }
+  }
 
   // how much measured depth is worth 46 pixels, for fading a shape out as it leaves the well
   const fadeTop = scaleY > 0 ? 46 / scaleY : 0;
