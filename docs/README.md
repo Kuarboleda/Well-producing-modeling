@@ -35,6 +35,22 @@ layer. What the well produces is then the mixture at the rate it settled at - wh
 the PVT panel says - so the rates across the top, and the fluid moving in the drawing, are taken
 from that mixture.
 
+**Colour.** Oil green, water blue, gas red, total liquid black, GOR orange, water cut cyan - the
+surveillance convention, so a colour means the same thing on every chart, in the drawing and in the
+rates across the top of the page. `colours.js` holds the only copy: `FLUID_COLORS` gives each fluid
+two shades of its own colour, `line` (the pure hue) for a stroke or a marker on white, and `text`
+(slightly softer) for the rate numbers, where a pure primary at 21px is harsh to read. The `.kpis`
+rules in `index.html` are the one copy that cannot import the file, so the page test compares the
+two and fails if they drift apart.
+
+Three things are deliberately NOT in that palette. The **IPR and VLP curves** are dark slate blue
+and purple: an IPR is a pressure against a rate, not a stream of oil, and drawn blue it would read
+as water on a page where blue means water. The **packer** stays hatched red, as it is drawn the
+world over, but a shade off the gas red. And the **lift gas** in the drawing keeps its own amber,
+because the drawing is the one place that has to tell the gas going in apart from the gas coming
+out. The per-series colour cycles on the correlation-comparison and sensitivity-curve charts are
+unchanged: no fluid is drawn on either, and every line there carries its value in its name.
+
 **The sensitivity chart** draws two rates against whatever is being varied: the total the well
 makes and the part of it that is saleable - liquid and oil, or gas and condensate - each in the
 colour that rate is written in across the top of the page. The total on its own hides what matters
@@ -148,6 +164,7 @@ flowing pressure can, which is what the *VLP comparison and matching* tab is for
 | `nodal.js` | translation of `nodal.py`: the operating point, VLP matching, sensitivities |
 | `advice.js` | translation of the advice part of `app_helpers.py`: which correlation suits this well, and why |
 | `units.js` | the one place where what you type (psig, or barg in metric) meets what the engine uses (always psia and oilfield units) |
+| `colours.js` | `FLUID_COLORS`: the one place the fluid colours are written, read by the charts and by the drawing |
 | `tools/dump_pvt.py`, `tools/dump_ipr.py` | run the PYTHON engine over thousands of cases and save the answers |
 | `tools/dump_nodal.py` | the same for the nodal analysis: operating points, matching, sensitivities |
 | `tools/crosscheck.mjs` | feed the same cases to the JavaScript and report the largest disagreement |

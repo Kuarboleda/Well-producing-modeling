@@ -199,10 +199,13 @@
              text-overflow: ellipsis; }
   .kpis .v { font-size: 21px; font-variant-numeric: tabular-nums; line-height: 1.25; }
   /* each rate in the colour that phase is drawn in, on the schematic and in the charts */
-  .kpis li.oil .v { color: #15803d; }
-  .kpis li.water .v { color: #1d4ed8; }
-  .kpis li.gas .v { color: #b91c1c; }
-  .kpis li.liquid .v { color: #0f766e; }
+  /* The rates in the surveillance colours: oil green, water blue, gas red, total liquid black.
+     These are the `text` shades of FLUID_COLORS in colours.js - the one copy of the palette that
+     cannot import it, so the page test compares the two and fails if they drift apart. */
+  .kpis li.oil .v { color: #2CA02C; }
+  .kpis li.water .v { color: #1F77B4; }
+  .kpis li.gas .v { color: #D62728; }
+  .kpis li.liquid .v { color: #1E1E1E; }
   .kpis.waiting .v { color: var(--ink-soft); }
 
   .charts { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -286,7 +289,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 23 Nov 2026 06:56 (local)</span>
+  <span class="sub build" id="build">build 23 Nov 2026 08:03 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">

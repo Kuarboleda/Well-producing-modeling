@@ -19,17 +19,17 @@ import * as nodal from "./nodal.js";
 import * as units from "./units.js";
 import * as advice from "./advice.js";
 import * as wellview from "./wellview.js";
+import { FLUID_COLORS, CURVE_COLOURS } from "./colours.js";
 
-// One place for the chart colours, so a pressure line is the same colour wherever it is drawn.
-// The colours the rates are written in across the top of the page, so a rate drawn on a chart is
-// the colour the reader has already learned it by.  They are the same values as the .kpis rules in
-// index.html; both places need them, and there is no stylesheet a chart library can read.
-const PHASE_TEXT = { liquid: "#0f766e", oil: "#15803d", water: "#1d4ed8", gas: "#b91c1c" };
-const IPR_COLOUR = "#1f77b4";     // the inflow curve
-const PROFILE_P = "#111827";      // the pressure down the well: black, so it is not the IPR
-const VLP_COLOUR = "#d62728";     // the tubing curve
-const TEMP_COLOUR = "#ff7f0e";    // temperature
-const GASLIFT_COLOUR = "#2ca02c"; // the gas lift injection depth
+// The one place the fluid colours are written is colours.js; wellview.js reads the same file, so
+// a dot moving up the drawing is the colour its rate is written in at the top of the page.
+const IPR_COLOUR = CURVE_COLOURS.ipr;         // the inflow curve
+const VLP_COLOUR = CURVE_COLOURS.vlp;         // the tubing curve
+const PROFILE_P = CURVE_COLOURS.pressure;     // the pressure down the well
+const TEMP_COLOUR = CURVE_COLOURS.temperature;
+// The injection depth is the one gas line on the profile, so it is gas red; dashed, because the
+// gas is going in rather than coming out.
+const GASLIFT_COLOUR = FLUID_COLORS.gas.line;
 
 const CURVE_POINTS = 41;          // points along the inflow curve on its own
 const NODAL_POINTS = 25;          // points along each curve when the VLP is calculated too
@@ -1690,6 +1690,8 @@ function sensitivityNow() {
   const pressureLabel = units.unitOf("pressure");
   const toRate = (/** @type {number} */ q) => units.fromEngine(c.rateUnit, q);
   const toP = (/** @type {number} */ p) => units.fromEngine("pressure", p);
+  // One colour per value swept, not per fluid: these curves are pressures against rates, and the
+  // chart beside them is the one that uses FLUID_COLORS.  Each line carries the value in its name.
   const colours = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b"];
 
   // one IPR and one VLP per value
@@ -1735,7 +1737,8 @@ function sensitivityNow() {
   const rateTraces = [{
     x: found.map((r) => r.value), y: found.map((r) => toRate(r.q)),
     mode: "lines+markers", name: oilWell ? `Liquid rate (${rateLabel})` : `Gas rate (${rateLabel})`,
-    line: { color: oilWell ? PHASE_TEXT.liquid : PHASE_TEXT.gas, width: 2.5 }, marker: { size: 8 },
+    line: { color: oilWell ? FLUID_COLORS.liquid.line : FLUID_COLORS.gas.line, width: 2.5 },
+    marker: { size: 8 },
   }];
   // A gas well's condensate is a liquid rate, which does not belong on a gas axis, so it gets one
   // of its own on the right; for an oil well both lines are the same kind of barrel.
@@ -1744,7 +1747,7 @@ function sensitivityNow() {
       x: found.map((r) => r.value), y: saleable, mode: "lines+markers",
       name: oilWell ? `Oil rate (${rateLabel})`
                     : `Condensate rate (${units.unitOf("liquidRate")})`,
-      line: { color: PHASE_TEXT.oil, width: 2.5, dash: oilWell ? "solid" : "dot" },
+      line: { color: FLUID_COLORS.oil.line, width: 2.5, dash: oilWell ? "solid" : "dot" },
       marker: { size: 8 }, ...(oilWell ? {} : { yaxis: "y2" }),
     }));
   }
@@ -1752,10 +1755,10 @@ function sensitivityNow() {
     choice.quantity ? `${choice.label} (${units.unitOf(choice.quantity)})` : choice.label,
     oilWell ? `Rate (${rateLabel})` : `Gas rate (${rateLabel})`));
   if (!oilWell && rateTraces.length > 1) {
-    sensLayout.yaxis.color = PHASE_TEXT.gas;
+    sensLayout.yaxis.color = FLUID_COLORS.gas.line;
     sensLayout.yaxis2 = { title: { text: `Condensate rate (${units.unitOf("liquidRate")})` },
                           overlaying: "y", side: "right", rangemode: "tozero",
-                          color: PHASE_TEXT.oil, showgrid: false };
+                          color: FLUID_COLORS.oil.line, showgrid: false };
     sensLayout.margin.r = 62;                      // room for the axis on the right
   }
   plot("chart-sens", rateTraces, sensLayout);
@@ -1994,6 +1997,7 @@ function compareNow() {
 function drawSurveyChart(depths, measured, rows, c) {
   const pressureLabel = units.unitOf("pressure");
   const lengthLabel = units.unitOf("length");
+  // one colour per correlation, for the same reason as above: no fluid is drawn on this chart
   const colours = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b",
                    "#7f7f7f"];
   /** @type {any[]} */

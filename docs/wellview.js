@@ -1,4 +1,5 @@
 // @ts-check
+
 /**
  * wellview.js - the live wellbore schematic.
  *
@@ -98,6 +99,8 @@ function phaseIn(s, surface = false) {
  * @property {boolean} [chokeOpen]  whether the production wing valve is drawn open
  */
 
+import { FLUID_COLORS } from "./colours.js";
+
 // The flow-pattern families.  Each one is DRAWN differently inside the tubing, so these carry the
 // name to put in the legend and in the tooltip rather than a colour to tint with.
 /** @type {Record<string, {colour: string, label: string}>} */
@@ -120,17 +123,23 @@ export const FLOW_FAMILIES = {
  * deep one, and above the valve - where the two streams have mixed - it is the one in between.
  * @type {Record<string, string>}
  */
+// The produced fluids come straight from the shared palette, so a drop travelling up the drawing
+// is the colour its rate is written in at the top of the page.  The two extra entries are the two
+// kinds of gas the drawing has to tell apart, which a rate strip never has to: the gas going IN
+// through the lift valve, and the formation gas below it that came out of the oil on its own.
 export const PHASE_COLOURS = {
-  oil: "#22c55e",
-  water: "#3b82f6",
-  gas: "#ef4444",           // the mixed stream above the gas lift valve
-  liftGas: "#ff6b4a",       // injected
-  solutionGas: "#dc2626",   // formation gas, below the valve
+  oil: FLUID_COLORS.oil.line,
+  water: FLUID_COLORS.water.line,
+  gas: FLUID_COLORS.gas.line,   // the mixed stream above the gas lift valve
+  liftGas: "#ff6b4a",           // injected
+  solutionGas: FLUID_COLORS.gas.text,   // formation gas, below the valve: a shade of the same red
 };
 
 const STEEL = "#64748b";
 const STEEL_DARK = "#334155";
-const SEAL = "#dc2626";
+// A packer is drawn as hatched red the world over, so it stays red; a shade off the gas red,
+// because on this page a pure red dot is gas and nothing else.
+const SEAL = "#A93226";
 
 /** @type {Record<string, string>} */
 export const FLOW_FAMILY_OF = {
@@ -310,17 +319,19 @@ export function render(svg, spec) {
   }
 
   // ---- what is standing in the annulus, and in the casing below the packer ----
+  // The standing fluid is washed in rather than laid on: a pure blue at full strength reads as a
+  // painted bar, and what is wanted is a column of brine you can see the casing wall through.
   const annTop = tree ? (SEAL_Y - ground) / scaleY : 0;
   const annWidth = 2 * rCasing;      // laid down full width; the tubing fluid covers the middle
   if (glOn) {
     tip(stroke(segment(annTop, glMd), annWidth, PHASE_COLOURS.liftGas, { id: "wv-anngas" }),
         "Lift gas: a pressurised column from surface down to the gas lift valve");
     tip(stroke(segment(glMd, spec.packer_md), annWidth, PHASE_COLOURS.water,
-               { id: "wv-anndead", opacity: 0.55 }),
+               { id: "wv-anndead", opacity: 0.3 }),
         "Dead completion fluid, below the gas lift valve");
   } else {
     tip(stroke(segment(annTop, spec.packer_md), annWidth, PHASE_COLOURS.water,
-               { id: "wv-anndead", opacity: 0.55 }),
+               { id: "wv-anndead", opacity: 0.3 }),
         "Dead completion fluid: no gas is being injected");
   }
   tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, PHASE_COLOURS.oil,

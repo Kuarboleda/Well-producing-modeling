@@ -11,6 +11,7 @@
 // Expect "All page checks passed." and nothing else.
 
 import { chromium } from "playwright";
+import { FLUID_COLORS } from "../colours.js";
 
 const BASE = process.env.PAGE_URL || "http://127.0.0.1:8765/";
 let bad = 0;
@@ -218,8 +219,9 @@ check("the operating point is drawn as a liquid rate and an oil rate",
       && sensPlot.traces[0].name.startsWith("Liquid rate")
       && sensPlot.traces[1].name.startsWith("Oil rate"),
       sensPlot.traces.map((/** @type {any} */ x) => x.name).join(" | "));
-check("and each is the colour its rate is written in at the top of the page",
-      sensPlot.traces[0].line.color === "#0f766e" && sensPlot.traces[1].line.color === "#15803d",
+check("and each is the colour its rate is drawn in everywhere else",
+      sensPlot.traces[0].line.color === FLUID_COLORS.liquid.line
+      && sensPlot.traces[1].line.color === FLUID_COLORS.oil.line,
       sensPlot.traces.map((/** @type {any} */ x) => x.line.color).join(" "));
 check("the oil line sits under the liquid line, because some of it is water",
       sensPlot.traces[1].y.every((/** @type {number} */ v, /** @type {number} */ i) =>
@@ -608,6 +610,34 @@ check("turning the gas lift on offers its rate and its depth",
       ["fluid.injection_gas_rate", "fluid.injection_md"].every((s) => onLift.includes(s)),
       onLift.join(" "));
 await setVal("lift", "none");
+
+// ---- 12d. the palette is written once ----
+// index.html cannot import colours.js, so the .kpis rules are a hand-kept copy of the `text`
+// shades. This is what stops them drifting apart without anyone noticing.
+const kpiColours = await page.evaluate(() => {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const phase of ["oil", "water", "gas", "liquid"]) {
+    const node = document.querySelector(`#kpis li.${phase} .v`);
+    out[phase] = node ? getComputedStyle(node).color : "missing";
+  }
+  return out;
+});
+/** @param {string} hex */
+const asRgb = (hex) => `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, `
+  + `${parseInt(hex.slice(5, 7), 16)})`;
+for (const phase of /** @type {const} */ (["oil", "water", "gas", "liquid"])) {
+  check(`the ${phase} rate is written in the palette's own colour`,
+        kpiColours[phase] === asRgb(FLUID_COLORS[phase].text),
+        `${kpiColours[phase]} against ${FLUID_COLORS[phase].text}`);
+}
+// and the two curves that are not fluids stay out of the fluid palette, so a colour means one thing
+const fluidHexes = Object.values(FLUID_COLORS).flatMap((c) => [c.line.toLowerCase(), c.text.toLowerCase()]);
+const nodalNow = await plotOf("chart-nodal");
+check("no inflow or tubing curve is drawn in a fluid colour",
+      nodalNow.traces.filter((/** @type {any} */ x) => x.line)
+        .every((/** @type {any} */ x) => !fluidHexes.includes(String(x.line.color).toLowerCase())),
+      nodalNow.traces.map((/** @type {any} */ x) => `${x.name}=${x.line && x.line.color}`).join(" "));
 
 // ---- 13. the build marker, so a cached page can be spotted ----
 const build = await page.$eval("#build", (n) => n.innerText);

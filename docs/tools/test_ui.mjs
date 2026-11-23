@@ -9,6 +9,7 @@
 //   node tools/test_ui.mjs
 
 import { chromium } from "playwright";
+import { FLUID_COLORS } from "../colours.js";
 const BASE = process.env.PAGE_URL || "http://127.0.0.1:8765/";
 let bad = 0;
 const check = (what, ok, detail = "") => {
@@ -461,17 +462,20 @@ const phases = await page.evaluate(() => {
            washOpacity: Number(document.querySelector("#wv-bore").getAttribute("opacity")) };
 });
 check("oil is drawn travelling up the tubing, not only as the colour behind everything",
-      phases.tubing.filter((f) => f === "#22c55e").length >= 4,
+      phases.tubing.filter((f) => f === FLUID_COLORS.oil.line).length >= 4,
       phases.tubing.join(" "));
-check("water is travelling with it", phases.tubing.filter((f) => f === "#3b82f6").length >= 2);
+check("water is travelling with it",
+      phases.tubing.filter((f) => f === FLUID_COLORS.water.line).length >= 2);
 // and the wash behind them is the liquid in the pipe, pale enough to see the oil against
 check("the wash in the bore is neither oil nor water, and is pale",
-      phases.wash !== "#22c55e" && phases.wash !== "#3b82f6" && phases.washOpacity < 0.2,
+      phases.wash !== FLUID_COLORS.oil.line && phases.wash !== FLUID_COLORS.water.line
+      && phases.washOpacity < 0.2,
       `${phases.wash} at ${phases.washOpacity}`);
 // what arrives at the perforations: with the reservoir above its bubble point the gas is still in
 // solution, so nothing red should be coming in through them
 check("above the bubble point no free gas comes in through the perforations",
-      phases.inflow.length > 0 && !phases.inflow.includes("#ef4444"), phases.inflow.join(" "));
+      phases.inflow.length > 0 && !phases.inflow.includes(FLUID_COLORS.gas.line),
+      phases.inflow.join(" "));
 // what turns the corner at the tee is whatever came up the pipe, so the flowline is not oil alone
 check("the flowline out of the tee carries the mixture, not just oil",
       phases.arm.length > 2 && new Set(phases.arm).size > 1, phases.arm.join(" "));
@@ -481,7 +485,8 @@ await setVal("p_res", "1800");
 await page.waitForTimeout(250);
 await calc();
 check("below the bubble point free gas does come in through the perforations",
-      await page.$$eval("#wv-inflow circle", (ns) => ns.some((n) => n.getAttribute("fill") === "#ef4444")));
+      await page.$$eval("#wv-inflow circle", (ns, red) =>
+        ns.some((n) => n.getAttribute("fill") === red), FLUID_COLORS.gas.line));
 await setVal("p_res", "3000");
 await page.waitForTimeout(250);
 await calc();
