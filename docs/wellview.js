@@ -72,15 +72,23 @@ function mix(a, b, k) {
 function phaseMix(s, n, surface = false) {
   const share = surface ? clamp(0.12 + s.gor / 20000, 0, 0.45)
     : s.freeGasIn ? clamp(0.08 + s.gor / 16000, 0, 0.35) : 0;
+  // A phase the well does not make gets no drops at all: a dry gas well was being drawn raining
+  // condensate and water because the two were assumed rather than read.
+  const makesOil = s.hasOil !== false;
+  const makesWater = s.hasWater !== false;
   // at least one of anything there is any of, so a phase is never rounded out of existence
-  const gas = share > 0 ? clamp(Math.round(n * share), 1, n - 1) : 0;
+  const liquid = makesOil || makesWater;
+  const gas = share > 0 ? clamp(Math.round(n * share), 1, liquid ? n - 1 : n) : 0;
   const wc = clamp(s.water_cut, 0, 1);
-  const water = wc > 0 ? clamp(Math.round((n - gas) * wc), 1, n - gas) : 0;
+  const water = !makesWater ? 0
+    : !makesOil ? n - gas
+      : wc > 0 ? clamp(Math.round((n - gas) * wc), 1, n - gas) : 0;
   /** @type {string[]} */
   const out = [];
   for (let i = 0; i < n; i++) {
     out.push(i < gas ? PHASE_COLOURS.gas
-      : i < gas + water ? PHASE_COLOURS.water : PHASE_COLOURS.oil);
+      : i < gas + water ? PHASE_COLOURS.water
+        : makesOil ? PHASE_COLOURS.oil : PHASE_COLOURS.gas);
   }
   // dealt round rather than in blocks, so the three do not arrive in three runs
   for (let i = out.length - 1; i > 0; i--) {
@@ -113,6 +121,9 @@ function phaseMix(s, n, surface = false) {
  * @property {boolean} [depthAxis]  draw the depth scale down the left; on unless turned off
  * @property {boolean} [freeGasIn]  gas breaks out in the reservoir itself, so it arrives at the
  *                                  perforations as free gas rather than all in solution
+ * @property {boolean} [gasWell]   the well makes gas, so what stands in it is gas, not liquid
+ * @property {boolean} [hasOil]    it makes oil, or condensate: green drops are worth drawing
+ * @property {boolean} [hasWater]  it makes water: blue drops are worth drawing
  * @property {{pr: string, pwf: string, fthp: string}|null} [callouts] the three pressures a well
  *                                  is read by, ready formatted, to write where each is measured
  * @property {number|null} [bubbleMd] the depth where the flowing pressure crosses the bubble
@@ -370,10 +381,18 @@ export function render(svg, spec) {
   // The standing fluid is washed in rather than laid on: a pure blue at full strength reads as a
   // painted bar, and what is wanted is a column of brine you can see the casing wall through.
   const annTop = tree ? (SEAL_Y - ground) / scaleY : 0;
-  // The LIQUID in the well, shaded between oil and water by the water cut.  Everything that holds
-  // the produced liquid is washed in it at the same strength - the tubing, the sump below the
-  // packer, the reservoir, the flowline - so they read as one stream rather than four fluids.
+  // What stands in the well, and at what strength.  For an oil well it is the LIQUID, shaded
+  // between oil and water by the water cut and washed in pale so the drops show through it; for a
+  // gas well it is the gas, at the strength the gassy bands in the tubing are drawn, so that the
+  // stream reads as one fluid from the perforations to the flowline rather than changing colour
+  // at the packer and again at the tee.
+  const gasWell = Boolean(spec.gasWell);
   const liquidTint = mix(PHASE_COLOURS.oil, PHASE_COLOURS.water, clamp(spec.water_cut, 0, 1));
+  const standing = gasWell ? PHASE_COLOURS.gas : liquidTint;
+  // the gassy bands in the tubing are drawn at 0.85, so the gas standing in the rest of the well
+  // is drawn at the same strength: at anything less the sump and the flowline came out pink
+  // against a red tubing, which is the discontinuity this is here to remove
+  const standingAt = gasWell ? 0.85 : 0.13;
   const annWidth = 2 * rCasing;      // laid down full width; the tubing fluid covers the middle
   if (glOn) {
     tip(stroke(segment(annTop, glMd), annWidth, PHASE_COLOURS.liftGas, { id: "wv-anngas" }),
@@ -389,19 +408,21 @@ export function render(svg, spec) {
   // The same wash as the tubing, and for the same reason: it is the same liquid, shaded between
   // oil and water by the water cut.  It was oil green whatever the well was making, which made
   // the sump a different fluid from the stream coming out of it.
-  tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, liquidTint,
-             { id: "wv-rathole", opacity: 0.13 }), "Reservoir fluid, below the packer");
+  tip(stroke(segment(spec.packer_md, perf_md), 2 * rCasing, standing,
+             { id: "wv-rathole", opacity: standingAt }), "Reservoir fluid, below the packer");
   svg.appendChild(node("rect", { x: at(perf_md)[0] - rCasing, y: Y(maxTvd),
                                  width: 2 * rCasing, height: Math.min(pad.b - 14, 42),
-                                 fill: liquidTint, opacity: 0.13 }));
+                                 fill: standing, opacity: standingAt }));
 
   // ---- the fluid in the tubing ----
-  // It stops at the swab valve, which is shut: nothing stands in the pipe above it.
-  const toShoe = segment(topMd, spec.shoe_md);
+  // It stops at the TEE, where the stream turns out of the well.  Above that the swab valve is
+  // shut and the pipe is dead: painting it full ran a red column up behind the swab on a gas
+  // well, which is the one place in the drawing where nothing is flowing at all.
+  const toShoe = segment(tree ? teeMd : topMd, spec.shoe_md);
   // Cleared to white first: the annulus is laid down full width behind it, and a see-through
   // liquid colour over the lift gas came out olive.
   stroke(toShoe, bore, "#ffffff");
-  stroke(toShoe, bore, liquidTint, { id: "wv-bore", opacity: 0.13 });
+  stroke(toShoe, bore, standing, { id: "wv-bore", opacity: standingAt });
 
   // ---- the flow regimes, drawn rather than tinted ----
   /** @type {{from: number, to: number, family: string, regime: string, px: number,
@@ -439,7 +460,7 @@ export function render(svg, spec) {
       }
     }
   }
-  bands[0].from = topMd;
+  bands[0].from = tree ? teeMd : topMd;
   for (const b of bands) {
     b.px = Math.abs(at(b.to)[1] - at(b.from)[1]) + Math.abs(at(b.to)[0] - at(b.from)[0]);
     b.riserFrom = b.from;
@@ -675,7 +696,7 @@ export function render(svg, spec) {
                       width: armEnd - bx + rTubing - 3.6, height: armBore };
     svg.appendChild(node("rect", { ...armRect, fill: "#ffffff" }));
     svg.appendChild(node("rect", { id: "wv-armbore", ...armRect,
-                                   fill: liquidTint, opacity: 0.13 }));
+                                   fill: standing, opacity: standingAt }));
     svg.appendChild(node("rect", { x: bx - rTubing - 6, y: CAP_Y - 10, width: 2 * rTubing + 12,
                                    height: 10, rx: 1.5, fill: "#8d9aa8" }));
     svg.appendChild(node("line", { x1: armEnd, y1: TEE_Y, x2: armEnd + 20, y2: TEE_Y,
@@ -761,36 +782,35 @@ export function render(svg, spec) {
   // so the moving fluid never runs across a number.  The one in the sump has a pill behind it,
   // because that is the one place where something IS moving over it.
   if (spec.callouts) {
-    /**
-     * A white halo carries a label over whatever is behind it; a pill is used where something is
-     * MOVING behind it, and is measured off the text rather than guessed from its length, which
-     * left the words hanging out of both ends of it.
-     * @param {number} x @param {number} y @param {string} text @param {string} anchor
-     * @param {boolean} [pill]
-     */
-    const callout = (x, y, text, anchor, pill = false) => {
-      const label = node("text", {
-        x, y, class: "wv-lbl", fill: "#64748b", "text-anchor": anchor,
-        ...(pill ? {} : { stroke: "#ffffff", "stroke-width": 3, "paint-order": "stroke fill" }),
-      }, text);
-      svg.appendChild(label);
-      if (!pill) return;
-      let box = { x: x - 48, y: y - 9, width: 96, height: 13 };
-      try {
-        const got = /** @type {SVGGraphicsElement} */ (/** @type {unknown} */ (label)).getBBox();
-        if (got.width > 1) box = got;
-      } catch { /* not laid out yet: the guess above will do */ }
-      svg.insertBefore(node("rect", { x: box.x - 5, y: box.y - 1.5, width: box.width + 10,
-                                      height: box.height + 3, rx: (box.height + 3) / 2,
-                                      fill: "#ffffff", opacity: 0.82 }), label);
+    /** @param {number} x @param {number} y @param {string} text @param {string} anchor */
+    const callout = (x, y, text, anchor) => svg.appendChild(node("text", {
+      x, y, class: "wv-lbl", fill: "#64748b", "text-anchor": anchor,
+      stroke: "#ffffff", "stroke-width": 3, "paint-order": "stroke fill",
+    }, text));
+    /** A thin grey line from a label to the thing it names, with a dot on the end.
+     * @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2 */
+    const leader = (x1, y1, x2, y2) => {
+      svg.appendChild(node("path", { d: `M${x1},${y1} L${x2},${y2}`, fill: "none",
+                                     stroke: "#94a3b8", "stroke-width": 0.9 }));
+      svg.appendChild(node("circle", { cx: x2, cy: y2, r: 1.9, fill: "#94a3b8" }));
     };
-    // In the rock, over the block it belongs to.  Not ON it: the block is only as wide as the
-    // formation showing beside the well, and the perforation tunnels cross most of that.
-    callout(at(perf_md)[0] - rCasing - 6, payTop - 7, `Pr = ${spec.callouts.pr}`, "end");
-    // At the sandface, across the perforated interval, which is where the pressure it names is
-    // measured.  Inside the casing, where the only thing moving is what is coming in.
-    callout(at(perf_md)[0], (payTop + perfBotY) / 2 + 4, `Pwf = ${spec.callouts.pwf}`,
-            "middle", true);
+    // Both pressures sit in the open above the reservoir blocks, one either side, and each points
+    // at what it means with a leader.  The flowing pressure used to sit IN the sump behind a white
+    // pill, which is a box over the one part of the drawing where the fluid is arriving.
+    const cx = at(perf_md)[0];
+    const prX = cx - rCasing - 6;
+    // ended at the panel's own right edge rather than started at the casing: begun at the casing
+    // the longer of the two ran off the side of the drawing
+    const pwfX = W - 4;
+    callout(prX, payTop - 10, `Pr = ${spec.callouts.pr}`, "end");
+    leader(prX - 26, payTop - 6, prX - 26, payTop + 13);
+    const pwfLabel = callout(pwfX, payTop - 10, `Pwf = ${spec.callouts.pwf}`, "end");
+    let pwfLeft = pwfX - 100;
+    try {
+      const box = /** @type {SVGGraphicsElement} */ (/** @type {unknown} */ (pwfLabel)).getBBox();
+      if (box.width > 1) pwfLeft = box.x;
+    } catch { /* not laid out yet: the guess above will do */ }
+    leader(Math.max(pwfLeft - 6, cx + rCasing + 4), payTop - 6, cx, payTop + 4);
     // At surface, in the open above the flowline and to the right of the swab.
     if (tree) {
       callout(bx + rTubing + 10, TEE_Y - Math.min(bore * 1.3, 34) / 2 - 8,
@@ -906,8 +926,10 @@ export function animate(view) {
         const m = clamp(Math.round(px / 34), 1, 10);
         add("bubble", () => node("circle", { r: bore * 0.07, fill: scene.gasAt(band.to),
                                              "data-gas": 1, opacity: 0.9 }), m, 1, inSlugs(m));
-        const liquid = clamp(Math.round(px / 24), 2, 18);
-        const nWater = Math.round(liquid * clamp(s.water_cut, 0, 1));
+        const liquid = s.hasOil === false && s.hasWater === false
+          ? 0 : clamp(Math.round(px / 24), 2, 18);
+        const nWater = s.hasWater === false ? 0
+          : s.hasOil === false ? liquid : Math.round(liquid * clamp(s.water_cut, 0, 1));
         if (liquid - nWater > 0) {
           add("oil", () => node("circle", { r: 2.1 + Math.random() * 1.2,
                                             fill: PHASE_COLOURS.oil, opacity: 0.95 }),
@@ -934,10 +956,11 @@ export function animate(view) {
       } else if (band.family === "annular" || band.family === "gas") {
         // entrained liquid droplets, carried fast up the middle of the gas core
         const n = clamp(Math.round(px / 16), 3, 22);
-        add("mist", () => node("circle", { r: 1.2 + Math.random() * 1.1,
-                                           fill: Math.random() < s.water_cut
-                                             ? PHASE_COLOURS.water : PHASE_COLOURS.oil,
-                                           opacity: 0.95 }), n, 2.1);
+        // the liquid carried in a gas core: only what the well actually makes
+        const mistMix = phaseMix({ ...s, freeGasIn: false, gor: 0 }, n);
+        add("mist", (/** @type {number} */ i) => node("circle", { r: 1.2 + Math.random() * 1.1,
+                                                                  fill: mistMix[i],
+                                                                  opacity: 0.95 }), n, 2.1);
       } else {
         const n = clamp(Math.round(px / 22), 2, 14);
         add("bubble", () => node("circle", { r: bore * 0.06, fill: scene.gasAt(band.to), "data-gas": 1, opacity: 0.8 }),
@@ -948,8 +971,10 @@ export function animate(view) {
       // the one phase on the page that never appeared to move.  Slug flow has already laid its
       // own liquid, in the slugs between the bubbles.
       if (band.family !== "annular" && band.family !== "gas" && band.family !== "slug") {
-        const liquid = clamp(Math.round(px / 24), 2, 18);
-        const nWater = Math.round(liquid * clamp(s.water_cut, 0, 1));
+        const liquid = s.hasOil === false && s.hasWater === false
+          ? 0 : clamp(Math.round(px / 24), 2, 18);
+        const nWater = s.hasWater === false ? 0
+          : s.hasOil === false ? liquid : Math.round(liquid * clamp(s.water_cut, 0, 1));
         const nOil = liquid - nWater;
         if (nOil > 0) {
           add("oil", () => node("circle", { r: 2.1 + Math.random() * 1.2,

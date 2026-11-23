@@ -745,16 +745,24 @@ check("each of them carries the unit the page is in",
       && said.filter((s) => /^(Pr|Pwf|FTHP) = /.test(s))
         .every((s) => s.endsWith(pressureUnit.replace(/[()]/g, ""))),
       `${said.join(" | ")} against ${pressureUnit}`);
-// the pill behind the flowing pressure is sized from the text, not guessed from its length
-check("the flowing pressure has something behind it, so the inflow cannot swallow it",
+// Both pressures stand in the open above the reservoir, one either side, and point at what they
+// mean with a leader.  Nothing is drawn over the sump: that is where the fluid arrives, and a
+// white pill sat across it.
+check("the two reservoir pressures sit either side of the well, clear of the sump",
       await page.evaluate(() => {
-        const label = [...document.querySelectorAll("#flow-svg text.wv-lbl")]
-          .find((n) => (n.textContent || "").startsWith("Pwf"));
-        const pill = label && label.previousElementSibling;
-        if (!label || !pill || pill.tagName !== "rect") return false;
-        const a = label.getBoundingClientRect(), b = pill.getBoundingClientRect();
-        return b.left < a.left && b.right > a.right;
+        const text = [...document.querySelectorAll("#flow-svg text.wv-lbl")];
+        const pr = text.find((n) => (n.textContent || "").startsWith("Pr "));
+        const pwf = text.find((n) => (n.textContent || "").startsWith("Pwf "));
+        const bore = document.querySelector("#wv-bore")?.getBoundingClientRect();
+        if (!pr || !pwf || !bore) return false;
+        const a = pr.getBoundingClientRect(), b = pwf.getBoundingClientRect();
+        const mid = (bore.left + bore.right) / 2;
+        // one each side, and both above the perforations rather than across them
+        return a.right < mid && b.left > mid
+          && a.bottom < (document.querySelector("polygon.wv-shoe")?.getBoundingClientRect().top ?? 0);
       }));
+check("and each one has a leader pointing at what it names",
+      (await page.$$eval("#flow-svg circle[fill='#94a3b8']", (ns) => ns.length)) === 2);
 // and the summary of the traverse sits under the two plots it describes, not across the drawing
 check("the operating summary stops short of the drawing",
       await page.evaluate(() => {

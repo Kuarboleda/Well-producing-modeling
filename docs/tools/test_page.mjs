@@ -724,6 +724,52 @@ check("no inflow or tubing curve is drawn in a fluid colour",
         .every((/** @type {any} */ x) => !fluidHexes.includes(String(x.line.color).toLowerCase())),
       nodalNow.traces.map((/** @type {any} */ x) => `${x.name}=${x.line && x.line.color}`).join(" "));
 
+// ---- 12e. a gas well is drawn as gas, end to end ----
+// What stands in the well is gas, not liquid, so the sump, the tubing and the flowline are all
+// the same colour: it used to change at the packer and again at the tee.
+await setVal("fluid_type", "gas");
+// a single-layer model, so the CGR and WGR below come from the panel: with commingled layers the
+// well makes whatever the LAYERS make, and the panel boxes are not used
+await setVal("gas_ipr", "darcy");
+await calcAgain();
+const gasLook = await page.evaluate(() => ({
+  sump: document.querySelector("#wv-rathole")?.getAttribute("stroke"),
+  bore: document.querySelector("#wv-bore")?.getAttribute("stroke"),
+  arm: document.querySelector("#wv-armbore")?.getAttribute("fill"),
+  strength: document.querySelector("#wv-rathole")?.getAttribute("opacity"),
+  armStrength: document.querySelector("#wv-armbore")?.getAttribute("opacity"),
+}));
+check("the sump, the tubing and the flowline are all the same gas colour",
+      gasLook.sump === "#FF0000" && gasLook.bore === "#FF0000" && gasLook.arm === "#FF0000",
+      `${gasLook.sump} / ${gasLook.bore} / ${gasLook.arm}`);
+check("and at the same strength, so the stream does not change shade on the way out",
+      gasLook.strength === gasLook.armStrength,
+      `${gasLook.strength} against ${gasLook.armStrength}`);
+
+// A dry gas well makes no condensate and no water, so neither is drawn and neither is in the key.
+await setVal("cgr", "0");
+await setVal("wgr", "0");
+await calcAgain();
+const dry = await page.evaluate(() => ({
+  fills: [...document.querySelectorAll("#wv-fluid circle, #wv-inflow circle")]
+    .map((n) => n.getAttribute("fill")),
+  key: [...document.querySelectorAll("#flow-legend > span")].map((n) => n.textContent?.trim()),
+}));
+check("a dry gas well drops no condensate and no water",
+      dry.fills.length > 10 && dry.fills.every((f) => f === "#FF0000"),
+      [...new Set(dry.fills)].join(" "));
+check("and its key offers neither", dry.key[0] === "Gas" && !/Condensate|Water/.test(dry.key.join(" ")),
+      dry.key.slice(0, 3).join(" | "));
+// put a little of each back and they return
+await setVal("cgr", "5");
+await setVal("wgr", "2");
+await calcAgain();
+const wetAgain = await page.$$eval("#wv-fluid circle, #wv-inflow circle",
+  (ns) => [...new Set(ns.map((n) => n.getAttribute("fill")))].sort().join(" "));
+check("a wet gas well drops both again",
+      wetAgain.includes("#008000") && wetAgain.includes("#0000FF"), wetAgain);
+await setVal("fluid_type", "oil");
+
 // ---- 13. the build marker, so a cached page can be spotted ----
 const build = await page.$eval("#build", (n) => n.innerText);
 check("the page shows which build it is", /^build \d{2} \w{3} \d{4} \d{2}:\d{2} \(/.test(build), build);

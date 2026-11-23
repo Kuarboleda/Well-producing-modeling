@@ -1572,6 +1572,13 @@ function bubbleDepth(c, tr) {
  * @param {boolean} borrowed whether that is a different correlation from the one in use
  */
 function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
+  // what a gas well actually produces alongside the gas, from the mixture when the layers made
+  // one and from the PVT panel when they did not
+  const gasFluid = /** @type {vlp.GasFluid} */ (c.fluid);
+  const gasCgr = c.fluid_type === "gas"
+    ? (c.mix && Number.isFinite(c.mix.cgr) ? c.mix.cgr : gasFluid.cgr) : 0;
+  const gasWgr = c.fluid_type === "gas"
+    ? (c.mix && Number.isFinite(c.mix.wgr) ? c.mix.wgr : gasFluid.wgr) : 0;
   lastWellArgs = [c, tr, rate, patternFrom, borrowed];
   const svg = /** @type {any} */ (document.getElementById("flow-svg"));
   if (!svg) return;
@@ -1610,9 +1617,15 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     md: c.well.md, tvd: c.well.tvd, tubing_id: num("tubing_id"),
     perf_top, packer_md, shoe_md,
     gl_md: c.gas_lift ? c.gas_lift.md : null,
+    // A gas well makes condensate and water in the ratio of its CGR to its WGR, and makes
+    // neither when both are zero: a dry gas well should not be shown dropping oil and water.
     water_cut: isOil ? (c.mix && Number.isFinite(c.mix.water_cut) ? c.mix.water_cut
-                                                                   : oil.water_cut) : 0.35,
+                                                                   : oil.water_cut)
+      : gasCgr + gasWgr > 0 ? gasWgr / (gasCgr + gasWgr) : 0,
     gor: isOil ? (c.mix && Number.isFinite(c.mix.gor) ? c.mix.gor : oil.producingGor()) : 6000,
+    gasWell: !isOil,
+    hasOil: isOil || gasCgr > 0,
+    hasWater: isOil ? true : gasWgr > 0,
     flowing: rate > 0,
     speed,
     lengthUnit: units.unitOf("length"),
@@ -1648,10 +1661,15 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     if (!tr) {
       legend.innerHTML = "";
     } else {
-      // the phases first, as round drops, because that is how they are drawn
-      const phases = c.fluid_type === "oil"
+      // The phases first, as round drops, because that is how they are drawn - and only the ones
+      // the well actually makes: a dry gas well was offering a key to condensate and water it
+      // does not produce and the drawing does not show.
+      const isOilWell = c.fluid_type === "oil";
+      const phases = (isOilWell
         ? [["oil", "Oil"], ["water", "Water"], ["gas", "Gas"]]
-        : [["gas", "Gas"], ["oil", "Condensate"], ["water", "Water"]];
+        : [["gas", "Gas"], ["oil", "Condensate"], ["water", "Water"]])
+        .filter(([key]) => isOilWell || key === "gas"
+          || (key === "oil" ? gasCgr > 0 : gasWgr > 0));
       let html = phases
         .map(([key, label]) => `<span><i style="background:`
              + `${wellview.PHASE_COLOURS[key]};border-radius:50%"></i>${label}</span>`)
@@ -1661,9 +1679,12 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
           + `border-radius:50%"></i>Lift gas</span>`;
       }
       // what the colour behind the drops is, which is a fair thing to wonder: it is not a phase
-      const liquid = c.fluid_type === "oil" ? "oil" : "condensate";
-      html += `<span class="flow-note">The drops are what is moving. The pale wash behind them is `
-        + `the liquid standing in the pipe, shaded between ${liquid} and water by the water cut.`
+      html += `<span class="flow-note">The drops are what is moving. `
+        + (isOilWell
+          ? "The pale wash behind them is the liquid standing in the pipe, shaded between oil and "
+            + "water by the water cut."
+          : "The red behind them is the gas filling the well, from the perforations to the "
+            + "flowline.")
         + `</span>`;
       // then the regimes this well has, named rather than swatched: each one is drawn as its own
       // shape inside the tubing, so a colour chip would say nothing
