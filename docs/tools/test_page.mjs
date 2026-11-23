@@ -630,6 +630,53 @@ const darcyRate = numberFrom(await results(), "Liquid rate (");
 check("a Darcy layer works out its own productivity index and the well still solves",
       Number.isFinite(darcyRate) && darcyRate > 0, `${darcyRate} - ${await noteText()}`);
 
+// ---- 12c2. a layer pressure is measured somewhere, and has to be put on a common datum ----
+// Layers at different depths cannot be compared, added or produced together until they all refer
+// to one depth, so each is corrected by the weight of its own fluid to the top of the perforations.
+await setVal("oil_ipr", "multilayer");
+await page.waitForTimeout(200);
+await page.$eval('button[data-opens="dlg-oil-layers"]', (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(150);
+const atDatum = numberFrom(await results(), "Highest layer pressure (");
+// layer 1 is the strongest; lift it 500 ft above the datum and it must gain pressure
+await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="tvd"]', (n) => {
+  /** @type {HTMLInputElement} */ (n).value = "7500";
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await page.$eval("#dlg-oil-layers", (n) => /** @type {HTMLDialogElement} */ (n).close());
+await calcAgain();
+const lifted = numberFrom(await results(), "Highest layer pressure (");
+check("a layer measured above the datum gains pressure on the way down to it",
+      lifted > atDatum + 50 && lifted < atDatum + 400, `${atDatum} becomes ${lifted}`);
+const correction = (await results()).find(([k]) => k.includes("Put on the datum"));
+check("and the correction is reported, with the gradient it used",
+      !!correction && /psi\/ft/.test(correction[1]), correction ? correction[1] : "no note");
+// put it back; a depth of 0 means it is already at the datum
+await page.$eval('button[data-opens="dlg-oil-layers"]', (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(150);
+
+// ---- 12c3. the layers drawn, each on its own and all of them together ----
+await page.$eval('button.plotlayers[data-plots="oil"]', (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(400);
+const layerPlot = await plotOf("chart-oil-layers");
+check("one curve per layer, plus the one they add up to", layerPlot.traces.length === 4,
+      layerPlot.traces.map((/** @type {any} */ x) => x.name).join(" | "));
+check("the layers are dashed and the composite is not",
+      layerPlot.traces.slice(0, 3).every((/** @type {any} */ x) => x.line.dash === "dash")
+      && !layerPlot.traces[3].line.dash);
+// the whole point of the picture: the sum is the sum
+const topOf = (/** @type {any} */ x) => Math.max(...x.x);
+check("and the composite is every layer added together",
+      Math.abs(topOf(layerPlot.traces[3])
+               - layerPlot.traces.slice(0, 3).reduce((/** @type {number} */ s, /** @type {any} */ x) => s + topOf(x), 0)) < 2,
+      `${topOf(layerPlot.traces[3])} against the three layers`);
+await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="tvd"]', (n) => {
+  /** @type {HTMLInputElement} */ (n).value = "0";
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await page.$eval("#dlg-oil-layers", (n) => /** @type {HTMLDialogElement} */ (n).close());
+await page.waitForTimeout(150);
+
 await setVal("oil_ipr", "pi");
 check("and the pressure box comes back for a single-layer model",
       !(await page.$eval("#p_res", (n) => n.disabled)));

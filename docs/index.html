@@ -271,6 +271,12 @@
   .addrow { padding: 5px 11px; font: inherit; font-size: 12.5px; cursor: pointer;
             border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); }
   .addrow:hover { border-color: #94a3b8; background: #f8fafc; }
+  .plotlayers { margin: 10px 0 0; padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer;
+                border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+                color: var(--ink); }
+  .plotlayers:hover { border-color: #94a3b8; }
+  .layerchart { width: 100%; height: 0; overflow: hidden; }
+  .layerchart.on { height: 380px; margin-top: 8px; }
   /* a frame around each plot: without one the two run together across the white between them */
   .charts.three > .chart.nodalcol, .charts.three > .chart.profilecol {
     border: 1px solid var(--line); border-radius: 6px; }
@@ -332,7 +338,7 @@
 <header>
   <h1>Integrated Well Modelling Tool</h1>
   <span class="sub">Nodal analysis in your browser</span>
-  <span class="sub build" id="build">build 23 Nov 2026 13:17 (local)</span>
+  <span class="sub build" id="build">build 23 Nov 2026 14:26 (local)</span>
   <span class="spacer"></span>
   <label class="units">Units
     <select id="unit_system">
@@ -387,9 +393,9 @@
           <div id="f-multi">
             <button type="button" class="callout" data-opens="dlg-oil-layers">Edit the layer table...</button>
             <p class="hint" id="oil-layer-count"></p>
-            <textarea id="oil_layers" class="mirror" rows="3" aria-hidden="true" tabindex="-1">pi 3200 2.0 600 10
-pi 3000 1.2 500 45
-pi 2800 0.6 400 80</textarea>
+            <textarea id="oil_layers" class="mirror" rows="3" aria-hidden="true" tabindex="-1">pi 3200 0 2.0 600 10
+pi 3000 0 1.2 500 45
+pi 2800 0 0.6 400 80</textarea>
           </div>
 
           <label id="f-pi">Productivity index <span class="u" data-unit="pi"></span>
@@ -540,9 +546,9 @@ pi 2800 0.6 400 80</textarea>
           <div id="f-gmulti">
             <button type="button" class="callout" data-opens="dlg-gas-layers">Edit the layer table...</button>
             <p class="hint" id="gas-layer-count"></p>
-            <textarea id="gas_layers" class="mirror" rows="3" aria-hidden="true" tabindex="-1">jones 3500 5 40 0 10 2
-jones 3300 2 25 3 8 3
-backpressure 3100 0.012 0.85 5 2</textarea>
+            <textarea id="gas_layers" class="mirror" rows="3" aria-hidden="true" tabindex="-1">jones 3500 0 5 40 0 10 2
+jones 3300 0 2 25 3 8 3
+backpressure 3100 0 0.012 0.85 5 2</textarea>
           </div>
 
           <div id="f-gasrock">
@@ -966,6 +972,7 @@ backpressure 3100 0.012 0.85 5 2</textarea>
       <thead><tr>
         <th>Layer</th><th>Model</th>
         <th>Pressure <span class="u" data-unit="pressure"></span></th>
+        <th title="True vertical depth the pressure was measured at. 0 means the datum, so no correction">Depth TVD <span class="u" data-unit="length"></span></th>
         <th>PI <span class="u" data-unit="pi"></span></th>
         <th>Perm <span class="u" data-unit="permeability"></span></th>
         <th>Height <span class="u" data-unit="length"></span></th>
@@ -998,6 +1005,9 @@ backpressure 3100 0.012 0.85 5 2</textarea>
     <label class="check" title="A layer below the flowing pressure takes fluid from the wellbore instead of being shut in">
       <input type="checkbox" id="oil_crossflow"> Allow crossflow into the weaker layers
     </label>
+    <button type="button" class="plotlayers" data-plots="oil">Calculate and plot the layers</button>
+    <div class="layerchart" id="chart-oil-layers"></div>
+    <p class="hint" id="oil-layer-msg"></p>
   </dialog>
 
   <dialog id="dlg-gas-layers" class="wide">
@@ -1013,6 +1023,7 @@ backpressure 3100 0.012 0.85 5 2</textarea>
       <thead><tr>
         <th>Layer</th><th>Model</th>
         <th>Pressure <span class="u" data-unit="pressure"></span></th>
+        <th title="True vertical depth the pressure was measured at. 0 means the datum, so no correction">Depth TVD <span class="u" data-unit="length"></span></th>
         <th>Perm <span class="u" data-unit="permeability"></span></th>
         <th>Height <span class="u" data-unit="length"></span></th>
         <th>Skin</th><th>C</th><th>n</th>
@@ -1025,6 +1036,9 @@ backpressure 3100 0.012 0.85 5 2</textarea>
     <label class="check" title="A layer below the flowing pressure takes gas from the wellbore instead of being shut in">
       <input type="checkbox" id="gas_crossflow"> Allow crossflow into the weaker layers
     </label>
+    <button type="button" class="plotlayers" data-plots="gas">Calculate and plot the layers</button>
+    <div class="layerchart" id="chart-gas-layers"></div>
+    <p class="hint" id="gas-layer-msg"></p>
   </dialog>
 
   <dialog id="dlg-corr" class="wide">

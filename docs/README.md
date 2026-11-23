@@ -38,7 +38,24 @@ copy of it to keep in step; anything that sets the value from outside, such as a
 spreadsheet: the block lands with that cell as its top left corner, rows are added if it runs past
 the end, and a heading row is left out.
 
-**Commingled layers.** One row per layer. An oil layer is either a **PI** layer, entered by its
+**Commingled layers.** One row per layer, each carrying the **depth its pressure was measured at**.
+A pressure is only ever measured somewhere, and layers at different depths cannot be compared,
+added or produced together until they all refer to one depth, so each is put on the top of the
+perforations - already the reference depth for the reservoir pressure and temperature - by the
+weight of its own fluid between the two: `p(datum) = p(layer) + rho (TVD_datum - TVD_layer) / 144`.
+The density is that layer's own fluid at its own pressure and the reservoir temperature: for an
+oil layer the oil and water it produces, in the proportion it produces them, so a watery layer
+corrects on a steeper gradient than a clean one; for a gas layer its own gas, from its own CGR. A
+depth of 0, which is what an untouched row holds, means the pressure is already at the datum and
+is left exactly as entered - so a case built before the column existed calculates as it always
+did. Every correction made is reported under the charts with the gradient it used.
+
+*Calculate and plot the layers* draws each layer's own inflow curve dashed and the one they add up
+to solid. Where a layer runs out of pressure its curve stops and the sum bends, and the bend is
+the point of the picture: it is how you see which layer is carrying the well, which one is nearly
+dead, and - with crossflow on - which one the well is feeding instead of producing.
+
+An oil layer is either a **PI** layer, entered by its
 productivity index, or a **Darcy** layer, entered by permeability, thickness and skin, which has
 its index worked out from them with the Bo, viscosity, re and rw at the foot of the window - the
 same two models, with the same shared numbers, as the Python. A gas layer is **Jones**, **Darcy**

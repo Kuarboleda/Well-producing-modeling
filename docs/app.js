@@ -292,16 +292,23 @@ function switchSystem(name) {
     cBox.value = typed.system === to ? String(c) : c.toExponential(6);
   }
 
-  // the survey table is text, so its depths are converted line by line
-  const survey = /** @type {HTMLTextAreaElement} */ (el("survey_text"));
-  survey.value = survey.value.split(/\r?\n/).map((line) => {
-    const parts = line.trim().split(/[\s,;]+/).filter((t) => t.length > 0);
-    if (parts.length < 2 || parts.some((t) => !Number.isFinite(Number(t)))) return line;
-    return parts.map((t) => {
-      const v = units.convert("length", Number(t), from, to);
-      return String(Number(v.toFixed(units.decimalsFor("length", v))));
-    }).join(" ");
-  }).join("\n");
+  // The tables are filled in cell by cell, and each column says what its number means, so they
+  // convert the same way every other box does.
+  for (const id of Object.keys(TABLES)) {
+    const table = document.getElementById(id);
+    if (!table) continue;
+    for (const column of TABLES[id].columns) {
+      if (!column.quantity) continue;
+      for (const node of table.querySelectorAll(`tbody input[data-key="${column.key}"]`)) {
+        const box = /** @type {HTMLInputElement} */ (node);
+        const value = Number(box.value);
+        if (!Number.isFinite(value)) continue;
+        const converted = units.convert(column.quantity, value, from, to);
+        box.value = String(Number(converted.toFixed(units.decimalsFor(column.quantity, converted))));
+      }
+    }
+    tableToText(id);                 // and the value the rest of the app reads follows the cells
+  }
 
   units.setSystem(to);
   writeUnitLabels();
@@ -411,12 +418,30 @@ function buildCase() {
       // The layers bring their own pressures, so the box at the top of the panel is not used: the
       // curve has to start at the highest layer, or the strongest layer would be cut off.
       ipr_name = "oil_multilayer";
+      // The liquid standing between a layer and the datum, for the depth correction: that layer's
+      // own oil and water, at its own pressure and the reservoir temperature.
+      const datum = wellmod.tvd_at(well, eng("depth"));
+      const column = {
+        datum,
+        /** @param {number} atP */
+        oil: (atP) => pvt.oilProperties(atP, t_res, num("api"), num("gas_sg"), eng("rsb"), pb_meas,
+                                        pick("pvt_method"), pick("visc_method")).rho_o,
+        /** @param {number} atP */
+        water: (atP) => pvt.waterProperties(atP, t_res,
+                                            pvt.salinityFromSg(num("water_sg"))).rho_w,
+      };
       // a layer with no GOR of its own falls back to the panel's, or to the solution GOR
-      const layers = oilLayers(num("water_cut") / 100.0,
-                               num("oil_gor") > 0 ? eng("oil_gor") : null);
+      const read = oilLayers(num("water_cut") / 100.0,
+                             num("oil_gor") > 0 ? eng("oil_gor") : null, column);
+      const layers = read.layers;
       ipr_inputs = { pb, layers, crossflow: ticked("oil_crossflow") };
       p_res = Math.max(...layers.map((layer) => layer.p_res));
       extra.push({ key: "Layers", value: String(layers.length) });
+      if (read.notes.length) {
+        extra.push({ key: `Put on the datum at ${show(units.fromEngine("length", datum), 0)} `
+                        + `${units.unitOf("length")} TVD`,
+                     value: read.notes.join("; ") });
+      }
       extra.push({ key: `Highest layer pressure (${units.unitOf("pressure")})`,
                    value: show(units.fromEngine("pressure", p_res), 0) });
       extra.push({ key: `Layers added up (${units.unitOf("pi")})`,
@@ -507,12 +532,19 @@ function buildCase() {
   if (model === "multilayer") {
     // Every layer gets its own Z, viscosity and gas gravity, worked out in gasLayers from its own
     // pressure and its own CGR, so there is nothing shared to evaluate here but the geometry.
-    const layers = gasLayers({
+    const datum = wellmod.tvd_at(well, eng("depth"));
+    const read = gasLayers({
       temp_f: t_res, re: eng("gas_re"), rw: eng("gas_rw"),
-      beta: num("gas_beta") > 0 ? eng("gas_beta") : null,
+      beta: num("gas_beta") > 0 ? eng("gas_beta") : null, datum,
       cgr, wgr, dry_sg, cond_api: num("cond_api"), y_h2s, y_co2, visc: pick("gas_visc") });
+    const layers = read.layers;
     p_res = Math.max(...layers.map((layer) => layer.p_res));
     extra.push({ key: "Layers", value: String(layers.length) });
+    if (read.notes.length) {
+      extra.push({ key: `Put on the datum at ${show(units.fromEngine("length", datum), 0)} `
+                      + `${units.unitOf("length")} TVD`,
+                   value: read.notes.join("; ") });
+    }
     extra.push({ key: `Highest layer pressure (${units.unitOf("pressure")})`,
                  value: show(units.fromEngine("pressure", p_res), 0) });
     return { ...base, fluid_type: "gas", fluid, ipr_name: "gas_multilayer",
@@ -589,50 +621,100 @@ function layerLines(text) {
  * A GOR of 0 means the solution GOR, and a line that is all numbers is read as the older
  * `<pressure> <PI> <water cut as a fraction> <GOR>`, so a well remembered in a browser from
  * before the table existed still opens.
+ * A layer also carries the depth its pressure was measured at. Pressures at different depths
+ * cannot be compared or produced together, so each is put on the common datum - the top of the
+ * perforations - by the weight of that layer's own fluid; a depth of 0 means it is already there.
  * @param {number} wc @param {number|null} gor
- * @returns {import("./ipr.js").OilLayer[]}
+ * @param {{datum: number, oil: (p: number) => number, water: (p: number) => number}} column
+ *        the datum depth and the densities of the two liquids at a pressure, for the correction
+ * @returns {{layers: import("./ipr.js").OilLayer[], notes: string[]}}
  */
-function oilLayers(wc, gor) {
+function oilLayers(wc, gor, column) {
   const rows = layerLines(/** @type {HTMLTextAreaElement} */ (el("oil_layers")).value);
   /** @type {import("./ipr.js").OilLayer[]} */
   const layers = [];
+  /** @type {string[]} */
+  const notes = [];
   for (const parts of rows) {
     const named = !Number.isFinite(Number(parts[0]));
     const kind = named ? parts[0].toLowerCase() : "legacy";
     if (named && kind !== "pi" && kind !== "darcy") continue;        // a heading line
     const n = (named ? parts.slice(1) : parts).map(Number);
     const k = layers.length + 1;
+    // what the model needs after its name, not counting the depth, which a legacy line lacks
     const want = kind === "darcy" ? 4 : 2;
-    if (!(n.length >= want && n.slice(0, want).every((v) => Number.isFinite(v)))) {
-      throw new Error(`Layer ${k}: expected ${want} numbers`
+    const d = kind === "legacy" ? 0 : 1;                  // 1 if this line carries a depth
+    if (!(n.length >= want + d && n.slice(0, want + d).every((v) => Number.isFinite(v)))) {
+      throw new Error(`Layer ${k}: expected ${want + d} numbers`
         + `${named ? ` after "${parts[0]}"` : ""}, read "${parts.join(" ")}".`);
     }
-    const p_res = units.toEngine("pressure", n[0]);
+    // the depth sits between the pressure and the model's own numbers, so everything after it
+    // shifts along by one; a legacy line has no depth at all
+    const entered = units.toEngine("pressure", n[0]);
+    const tvd = d ? units.toEngine("length", n[1]) : 0;
     let J;
     if (kind === "darcy") {
-      if (!(n[1] > 0 && n[2] > 0)) {
+      if (!(n[d + 1] > 0 && n[d + 2] > 0)) {
         throw new Error(`Layer ${k}: permeability and thickness must be above 0.`);
       }
       J = ipr.darcy_productivity_index_oil(
-        units.toEngine("permeability", n[1]), units.toEngine("length", n[2]),
-        eng("ml_bo"), eng("ml_mu"), eng("ml_re"), eng("ml_rw"), n[3]);
+        units.toEngine("permeability", n[d + 1]), units.toEngine("length", n[d + 2]),
+        eng("ml_bo"), eng("ml_mu"), eng("ml_re"), eng("ml_rw"), n[d + 3]);
     } else {
-      J = units.toEngine("pi", n[1]);
+      J = units.toEngine("pi", n[d + 1]);
       if (!(J > 0)) throw new Error(`Layer ${k}: the productivity index must be above 0.`);
     }
     // the older all-numbers line put the water cut third, as a fraction, and the GOR fourth
-    const rowGor = kind === "legacy" ? n[3] : n[want];
-    const rowWc = kind === "legacy" ? n[2] : (n[want + 1] ?? NaN) / 100;
+    const rowGor = kind === "legacy" ? n[3] : n[d + want];
+    const rowWc = kind === "legacy" ? n[2] : (n[d + want + 1] ?? NaN) / 100;
+    const layerWc = Number.isFinite(rowWc) ? clampFraction(rowWc, k) : wc;
+    // What stands between the layer and the datum is the layer's own liquid, oil and water in the
+    // proportion it produces them.
+    const rho = column.oil(entered) * (1 - layerWc) + column.water(entered) * layerWc;
+    const { p, shift, gradient } = toDatum(entered, tvd, column.datum, rho);
+    if (shift !== 0) {
+      notes.push(`Layer ${k}: ${show(units.fromEngine("pressure", entered), 0)} at `
+        + `${show(units.fromEngine("length", tvd), 0)} becomes `
+        + `${show(units.fromEngine("pressure", p), 0)} at the datum `
+        + `(${gradient.toFixed(3)} psi/ft)`);
+    }
     layers.push({
-      p_res, J,
-      wc: Number.isFinite(rowWc) ? clampFraction(rowWc, k) : wc,
+      p_res: p, J, wc: layerWc,
       gor: Number.isFinite(rowGor) && rowGor > 0 ? units.toEngine("gor", rowGor) : gor,
     });
   }
   if (layers.length < 1) {
     throw new Error("Give at least one layer: a pressure and a productivity index.");
   }
-  return layers;
+  return { layers, notes };
+}
+
+/**
+ * Put a layer's pressure on the common datum.
+ *
+ * A pressure is only ever measured somewhere, and layers at different depths cannot be compared,
+ * added or produced together until they are all referred to the same depth - here the top of the
+ * perforations, which is already the reference depth for the reservoir pressure and temperature.
+ * The correction is the weight of the reservoir fluid between the two depths:
+ *
+ *     p(datum) = p(layer) + rho * (TVD_datum - TVD_layer) / 144
+ *
+ * so a layer measured ABOVE the datum gains pressure and one below it loses pressure.  The density
+ * is the layer's own fluid at its own pressure and the reservoir temperature, because that is what
+ * stands between the two depths in that layer's part of the reservoir; it is worked out once, at
+ * the entered pressure, which is far closer than the correction needs.
+ *
+ * A depth of 0, which is what an untouched row holds, means "already at the datum" and leaves the
+ * pressure exactly as it was entered.
+ *
+ * @param {number} p the pressure as entered, psia @param {number} tvd its depth, ft (0 = datum)
+ * @param {number} datum the datum depth, ft @param {number} rho lb/ft3 of the fluid between them
+ * @returns {{p: number, shift: number, gradient: number}}
+ */
+function toDatum(p, tvd, datum, rho) {
+  const gradient = rho / 144.0;
+  const shift = tvd > 0 ? gradient * (datum - tvd) : 0;
+  return { p: p + shift, shift, gradient };
 }
 
 /** @param {number} value @param {number} layer */
@@ -648,43 +730,61 @@ function clampFraction(value, layer) {
  * described by the rock it sits in and a back-pressure layer by a curve fitted to a test, and the
  * two take different numbers.  The deliverability coefficients a and b are worked out here, each
  * from its own layer's pressure, so every layer gets its own Z and viscosity.
+ * Each layer also carries the depth its pressure was measured at, and is put on the common datum
+ * by the weight of its own gas; a depth of 0 means it is already there.
  * @param {{temp_f: number, re: number, rw: number, beta: number|null, cgr: number, wgr: number,
- *          dry_sg: number, cond_api: number, y_h2s: number, y_co2: number, visc: string}} shared
- * @returns {import("./ipr.js").GasLayer[]}
+ *          dry_sg: number, cond_api: number, y_h2s: number, y_co2: number, visc: string,
+ *          datum: number}} shared
+ * @returns {{layers: import("./ipr.js").GasLayer[], notes: string[]}}
  */
 function gasLayers(shared) {
   const rows = layerLines(/** @type {HTMLTextAreaElement} */ (el("gas_layers")).value);
   /** @type {import("./ipr.js").GasLayer[]} */
   const layers = [];
+  /** @type {string[]} */
+  const notes = [];
   for (const parts of rows) {
     const kind = parts[0].toLowerCase();
     if (!["jones", "darcy", "backpressure", "back_pressure"].includes(kind)) continue;
     const n = parts.slice(1).map(Number);
     const k = layers.length + 1;
     const bp = kind.startsWith("back");
-    const want = bp ? 3 : 4;
+    const want = bp ? 4 : 5;          // the pressure, its depth, then the model's own numbers
     if (!(n.length >= want && n.slice(0, want).every((v) => Number.isFinite(v)))) {
       throw new Error(`Layer ${k} (${kind}): expected ${want} numbers after the model name, `
         + `read "${parts.slice(1).join(" ")}".`);
     }
-    const p_layer = units.toEngine("pressure", n[0]);
+    const entered = units.toEngine("pressure", n[0]);
+    const tvd = units.toEngine("length", n[1]);
     const cgr = n.length > want ? n[want] : shared.cgr;
     const wgr = n.length > want + 1 ? n[want + 1] : shared.wgr;
+    // The gas this layer makes, which is both what fills the hole between it and the datum and
+    // what its own Z and viscosity are worked out for: a deeper, richer layer is a different gas
+    // from the one above it.
+    const sg = cgr > 0 ? pvt.wetGasGravity(shared.dry_sg, cgr, shared.cond_api) : shared.dry_sg;
+    const atLayer = pvt.gasProperties(entered, shared.temp_f, sg,
+                                      shared.y_h2s, shared.y_co2, shared.visc);
+    const { p: p_layer, shift, gradient } =
+      toDatum(entered, tvd, shared.datum, atLayer.rho_g);
+    if (shift !== 0) {
+      notes.push(`Layer ${k}: ${show(units.fromEngine("pressure", entered), 0)} at `
+        + `${show(units.fromEngine("length", tvd), 0)} becomes `
+        + `${show(units.fromEngine("pressure", p_layer), 0)} at the datum `
+        + `(${gradient.toFixed(3)} psi/ft)`);
+    }
     if (bp) {
-      const nExp = n[2];
+      const nExp = n[3];
       layers.push({ p_res: p_layer, cgr, wgr,
-                    C: units.convertBackpressureC(n[1], nExp, units.system(), "field"), n: nExp });
+                    C: units.convertBackpressureC(n[2], nExp, units.system(), "field"), n: nExp });
       continue;
     }
-    // Z and the viscosity at 75 % of THIS layer's pressure, with the gas this layer makes: a
-    // deeper, richer layer is a different gas from the one above it.
-    const sg = cgr > 0 ? pvt.wetGasGravity(shared.dry_sg, cgr, shared.cond_api) : shared.dry_sg;
+    // Z and the viscosity at 75 % of the layer's pressure, as the Python does it
     const props = pvt.gasProperties(0.75 * p_layer, shared.temp_f, sg,
                                     shared.y_h2s, shared.y_co2, shared.visc);
-    const kLayer = units.toEngine("permeability", n[1]);
-    const hLayer = units.toEngine("length", n[2]);
+    const kLayer = units.toEngine("permeability", n[2]);
+    const hLayer = units.toEngine("length", n[3]);
     const a = ipr.gas_a_coefficient(shared.temp_f, kLayer, hLayer, props.mu_g, props.z,
-                                    shared.re, shared.rw, n[3]);
+                                    shared.re, shared.rw, n[4]);
     const b = kind === "darcy"
       ? 0.0
       : ipr.gas_b_coefficient(shared.temp_f, kLayer, hLayer, props.z, sg, shared.rw, shared.beta);
@@ -693,7 +793,7 @@ function gasLayers(shared) {
   if (layers.length < 1) {
     throw new Error("Give at least one layer, each line starting with jones, darcy or backpressure.");
   }
-  return layers;
+  return { layers, notes };
 }
 
 /**
@@ -2425,9 +2525,11 @@ function showTab(tabId) {
 // the table is a way of filling that value in, not a second copy of it to keep in step.
 
 /**
- * One column of a table that is filled in.
+ * One column of a table that is filled in.  `quantity` is what the number in it MEANS, so that
+ * switching the units converts these cells along with every other box on the page.
  * @typedef {{key: string, kind?: "number" | "select", options?: [string, string][],
- *            value?: string, step?: string, usedBy?: string[]}} Column
+ *            value?: string, step?: string, usedBy?: string[],
+ *            quantity?: import("./units.js").Quantity}} Column
  */
 
 /** @type {Record<string, {columns: Column[], mirror: string, numbered?: boolean,
@@ -2435,18 +2537,20 @@ function showTab(tabId) {
 const TABLES = {
   "survey-table": {
     mirror: "survey_text",
-    columns: [{ key: "md", step: "100" }, { key: "tvd", step: "100" }],
+    columns: [{ key: "md", step: "100", quantity: "length" },
+              { key: "tvd", step: "100", quantity: "length" }],
   },
   "oil-layer-table": {
     mirror: "oil_layers", numbered: true, count: "oil-layer-count", noun: "layer",
     columns: [
       { key: "model", kind: "select", options: [["pi", "PI"], ["darcy", "Darcy"]], value: "pi" },
-      { key: "p", step: "50", value: "3000" },
-      { key: "pi", step: "0.1", value: "1", usedBy: ["pi"] },
-      { key: "k", step: "5", value: "50", usedBy: ["darcy"] },
-      { key: "h", step: "5", value: "50", usedBy: ["darcy"] },
+      { key: "p", step: "50", value: "3000", quantity: "pressure" },
+      { key: "tvd", step: "100", value: "0", quantity: "length" },
+      { key: "pi", step: "0.1", value: "1", usedBy: ["pi"], quantity: "pi" },
+      { key: "k", step: "5", value: "50", usedBy: ["darcy"], quantity: "permeability" },
+      { key: "h", step: "5", value: "50", usedBy: ["darcy"], quantity: "length" },
       { key: "skin", step: "0.5", value: "0", usedBy: ["darcy"] },
-      { key: "gor", step: "50", value: "500" },
+      { key: "gor", step: "50", value: "500", quantity: "gor" },
       { key: "wc", step: "5", value: "30" },
     ],
   },
@@ -2455,9 +2559,10 @@ const TABLES = {
     columns: [
       { key: "model", kind: "select", value: "jones",
         options: [["jones", "Jones"], ["darcy", "Darcy"], ["backpressure", "Back pressure"]] },
-      { key: "p", step: "50", value: "3000" },
-      { key: "k", step: "1", value: "5", usedBy: ["jones", "darcy"] },
-      { key: "h", step: "5", value: "30", usedBy: ["jones", "darcy"] },
+      { key: "p", step: "50", value: "3000", quantity: "pressure" },
+      { key: "tvd", step: "100", value: "0", quantity: "length" },
+      { key: "k", step: "1", value: "5", usedBy: ["jones", "darcy"], quantity: "permeability" },
+      { key: "h", step: "5", value: "30", usedBy: ["jones", "darcy"], quantity: "length" },
       { key: "skin", step: "0.5", value: "0", usedBy: ["jones", "darcy"] },
       { key: "C", step: "0.001", value: "0.01", usedBy: ["backpressure"] },
       { key: "n", step: "0.05", value: "0.85", usedBy: ["backpressure"] },
@@ -2601,6 +2706,19 @@ function refreshRow(row, id) {
   }
 }
 
+// How many numbers a line of each model held BEFORE the layer depth column was added. A line with
+// that many is from a well saved before it existed, and a zero is slipped in after the pressure,
+// which means "at the datum" and so leaves that well calculating exactly as it did.
+const COLUMNS_BEFORE_DEPTH = { pi: 4, darcy: 6, jones: 6, backpressure: 5 };
+
+/** @param {string[]} words @returns {string[]} */
+function withLayerDepth(words) {
+  const kind = String(words[0]).toLowerCase();
+  const was = COLUMNS_BEFORE_DEPTH[/** @type {keyof typeof COLUMNS_BEFORE_DEPTH} */ (kind)];
+  if (was === undefined || words.length - 1 !== was) return words;
+  return [words[0], words[1], "0", ...words.slice(2)];
+}
+
 /** Fill a table from the text its mirror holds. @param {string} id */
 function textToTable(id) {
   const spec = TABLES[id];
@@ -2611,7 +2729,7 @@ function textToTable(id) {
   for (const line of mirror.value.split(/\r?\n/)) {
     const bare = line.split("#")[0];
     const words = bare.replace(/[,;]/g, " ").split(/\s+/).filter((s) => s.length > 0);
-    if (words.length) addRow(id, words);
+    if (words.length) addRow(id, withLayerDepth(words));
   }
   if (!body.children.length) addRow(id);
 }
@@ -2689,6 +2807,80 @@ for (const button of document.querySelectorAll("button.addrow")) {
     addRow(id);
     tableToText(id);
   });
+}
+
+/**
+ * Draw each layer's own inflow curve and the one they add up to.
+ *
+ * The composite is not a layer and does not look like one: where a layer runs out of pressure its
+ * curve stops and the sum bends, and the bend is the point of the picture.  Reading it is how an
+ * engineer sees which layer is carrying the well, which one is nearly dead, and - with crossflow
+ * on - which one the well is feeding instead of producing.
+ * @param {"oil" | "gas"} which
+ */
+function plotLayers(which) {
+  const chart = `chart-${which}-layers`;
+  const node = document.getElementById(chart);
+  const note = document.getElementById(`${which}-layer-msg`);
+  if (note) { note.textContent = ""; note.className = "hint"; }
+  try {
+    const c = buildCase();
+    const wanted = which === "oil" ? "oil_multilayer" : "gas_multilayer";
+    if (c.ipr_name !== wanted) {
+      throw new Error(`Choose "Multilayer (commingled)" as the inflow model first.`);
+    }
+    const layers = c.ipr_inputs.layers;
+    const crossflow = !!c.ipr_inputs.crossflow;
+    const top = Math.max(...layers.map((/** @type {{p_res: number}} */ l) => l.p_res));
+    const points = 60;
+    /** @type {number[]} */
+    const pwfs = [];
+    for (let i = 0; i <= points; i++) pwfs.push(top * (1 - i / points));
+    /** @type {number[][]} */
+    const perLayer = pwfs.map((pwf) => (which === "oil"
+      ? ipr.multilayer_rates(c.p_res, pwf, c.ipr_inputs.pb, layers, crossflow)
+      : ipr.gas_multilayer_rates(c.p_res, pwf, layers, crossflow)));
+    const rateUnit = units.unitOf(c.rateUnit);
+    const toRate = (/** @type {number} */ q) => units.fromEngine(c.rateUnit, q);
+    const toP = (/** @type {number} */ x) => units.fromEngine("pressure", x);
+    const y = pwfs.map(toP);
+    const traces = layers.map((/** @type {{p_res: number}} */ layer, /** @type {number} */ i) => ({
+      x: perLayer.map((row) => toRate(row[i])), y,
+      mode: "lines", name: `Layer ${i + 1} at ${show(toP(layer.p_res), 0)}`,
+      line: { color: LAYER_COLOURS[i % LAYER_COLOURS.length], width: 1.6, dash: "dash" },
+    }));
+    traces.push(/** @type {any} */ ({
+      x: perLayer.map((row) => toRate(row.reduce((s, q) => s + q, 0))), y,
+      mode: "lines", name: "All of them together",
+      line: { color: CURVE_COLOURS.ipr, width: 2.8 },
+    }));
+    const layout = layoutFor(`Rate (${rateUnit})`,
+                             `Flowing bottom-hole pressure (${units.unitOf("pressure")})`);
+    layout.margin.t = 34;
+    // the box has to have its height before the chart is drawn into it, or it is drawn into nothing
+    if (node) node.classList.add("on");
+    plot(chart, traces, layout);
+    if (note) {
+      note.textContent = `Dashed, each layer on its own; solid, what they make together. `
+        + `Every pressure is at the datum.`
+        + (crossflow ? " With crossflow on, a layer below the flowing pressure takes fluid in, so"
+          + " its curve goes negative." : "");
+    }
+  } catch (error) {
+    if (node) { node.classList.remove("on"); node.innerHTML = ""; }
+    if (note) {
+      note.className = "note error";
+      note.textContent = /** @type {Error} */ (error).message;
+    }
+  }
+}
+
+// one colour per layer, and none of them a fluid colour: a layer is not a phase
+const LAYER_COLOURS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf", "#7f7f7f"];
+
+for (const button of document.querySelectorAll("button.plotlayers")) {
+  button.addEventListener("click", () => plotLayers(
+    /** @type {"oil" | "gas"} */ (String(/** @type {HTMLElement} */ (button).dataset.plots))));
 }
 
 // The windows themselves.  Clicking the darkened page behind one closes it, which is what every
