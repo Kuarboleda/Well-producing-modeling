@@ -23,17 +23,34 @@ three regimes, Fetkovich, both horizontal models (Joshi, and Kuchuk and Goode) a
 layers, for oil and for gas. Still to come: the gas lift valve design, PVT matching to laboratory
 data, and the survey and layer tables as tables rather than pasted text.
 
-**Commingled layers.** One layer per line in a text box, the way the survey is entered. An oil
-line is the layer's pressure, its productivity index, its water cut and its GOR; a gas line names
-its own model first (`jones`, `darcy` or `backpressure`) because a layer described by the rock it
-sits in and a layer described by a curve fitted to a test take different numbers. Leave the
-produced-fluid columns off a line and it falls back to the Fluid (PVT) panel. Every gas layer gets
-its own Z, viscosity and well-stream gravity, worked out from its own pressure and its own CGR: a
-deeper, richer layer is a different gas from the one above it. The layers bring their own
-pressures, so the Pr box at the top of the panel is greyed out and the curve starts at the highest
-layer. What the well produces is then the mixture at the rate it settled at - which is not what
-the PVT panel says - so the rates across the top, and the fluid moving in the drawing, are taken
-from that mixture.
+**Windows.** Three things on the page are tables rather than boxes, and one is a whole job rather
+than an input: the survey, the oil layers, the gas layers, and comparing the correlations to a
+measured survey. Each opens in a window from the section it belongs to - *Well path...* under
+Equipment, *Edit the layer table...* under the inflow model, *Compare and match to measured
+data...* under VLP correlation. A tab is for a view you come back to; these are jobs done once and
+closed, and keeping them in the panel either swamped it or put them somewhere they did not belong.
+
+Every table writes what it holds into a plain text value that stays in the page, and that text is
+what the rest of the app reads - the survey parser, the layer parsers, what is remembered in this
+browser, and every check over them. So the table is a way of filling that value in, not a second
+copy of it to keep in step; anything that sets the value from outside, such as a remembered well or
+*Reset*, is carried straight back into the table. Click a cell and paste a block out of a
+spreadsheet: the block lands with that cell as its top left corner, rows are added if it runs past
+the end, and a heading row is left out.
+
+**Commingled layers.** One row per layer. An oil layer is either a **PI** layer, entered by its
+productivity index, or a **Darcy** layer, entered by permeability, thickness and skin, which has
+its index worked out from them with the Bo, viscosity, re and rw at the foot of the window - the
+same two models, with the same shared numbers, as the Python. A gas layer is **Jones**, **Darcy**
+or **Back pressure**; the first two are described by the rock they sit in, the third by a curve
+fitted to a test, so it takes C and n instead, and the cells a model does not use are greyed out
+rather than hidden, so the columns still line up. A GOR of 0 means the solution GOR. Every gas
+layer gets its own Z, viscosity and well-stream gravity, worked out from its own pressure and its
+own CGR: a deeper, richer layer is a different gas from the one above it. The layers bring their
+own pressures, so the Pr box at the top of the panel is greyed out and the curve starts at the
+highest layer. What the well produces is then the mixture at the rate it settled at - which is not
+what the PVT panel says - so the rates across the top, and the fluid moving in the drawing, are
+taken from that mixture.
 
 **Colour.** Oil green, water blue, gas red, total liquid black, GOR orange, water cut cyan - the
 surveillance convention, so a colour means the same thing on every chart, in the drawing and in the

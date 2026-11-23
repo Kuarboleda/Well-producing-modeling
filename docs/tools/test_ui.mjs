@@ -97,16 +97,39 @@ await page.keyboard.press("Enter");
 await page.waitForFunction(() => document.querySelector("#btn-calc").textContent === "Calculate", null, { timeout: 60000 });
 await page.waitForTimeout(300);
 check("Enter in an input box calculates", !(await staleShown()));
-// Enter in the survey box must NOT calculate: a survey needs its line breaks
+// The survey is a table of boxes now, not one box with line breaks in it, so Enter can calculate
+// there like it does anywhere else.  What matters is that the table and the value the rest of the
+// app reads say the same thing.
 await page.selectOption("#survey_mode", "deviated");
+// whatever the checks above left in the survey, start this one from a known good one
+await page.$eval("#survey_text", (n) => {
+  /** @type {HTMLTextAreaElement} */ (n).value = "0 0\n2000 2000\n6000 5500\n9000 7000";
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+});
 await page.waitForTimeout(250);
-const beforeLines = (await page.$eval("#survey_text", (n) => n.value)).split("\n").length;
-await page.focus("#survey_text");
-await page.keyboard.press("End");
-await page.keyboard.press("Enter");
+await page.$eval('button[data-opens="dlg-path"]', (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(200);
+check("the well path opens in a window", await page.$eval("#dlg-path", (n) => n.open));
+const surveyRows = await page.$$eval("#survey-table tbody tr", (rows) => rows.map(
+  (r) => [...r.querySelectorAll("input")].map((c) => c.value).join(" ")));
+check("the survey table says what the survey says",
+      surveyRows.join("\n") === (await page.$eval("#survey_text", (n) => n.value)).trim(),
+      `table [${surveyRows.join(" | ")}] against text `
+      + `[${(await page.$eval("#survey_text", (n) => n.value)).replace(/\n/g, " | ")}]`);
+// a station added in the table reaches the value the rest of the app reads
+await page.click('button.addrow[data-adds="survey-table"]');
+await page.$$eval("#survey-table tbody tr:last-child input", (boxes) => {
+  boxes[0].value = "11000"; boxes[0].dispatchEvent(new Event("input", { bubbles: true }));
+  boxes[1].value = "8300"; boxes[1].dispatchEvent(new Event("input", { bubbles: true }));
+});
 await page.waitForTimeout(250);
-check("Enter in the survey box adds a line instead",
-      (await page.$eval("#survey_text", (n) => n.value)).split("\n").length === beforeLines + 1);
+check("a station added in the table reaches the survey",
+      (await page.$eval("#survey_text", (n) => n.value)).trim().endsWith("11000 8300"));
+await page.$eval("#survey-table tbody tr:last-child button.del", (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(200);
+check("and removing it takes it away again",
+      !(await page.$eval("#survey_text", (n) => n.value)).includes("11000"));
+await page.$eval("#dlg-path", (n) => /** @type {HTMLDialogElement} */ (n).close());
 await page.selectOption("#survey_mode", "vertical");
 
 // ---- 5. the guide, and the inputs remembered across a refresh ----

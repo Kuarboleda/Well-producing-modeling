@@ -107,6 +107,8 @@ const QUANTITY_OF = {
   gkg_kykx: null, gkg_top: null,
   // the layer tables carry their own units inside the text, so there is nothing to convert here
   oil_layers: null, oil_crossflow: null, gas_layers: null, gas_crossflow: null,
+  // shared by every Darcy oil layer, in the layer window
+  ml_bo: "fvf", ml_mu: "viscosity", ml_re: "length", ml_rw: "length",
   bp_c: null,                      // handled on its own: see switchSystem
   bp_n: null,
   // fluid
@@ -409,6 +411,7 @@ function buildCase() {
       // The layers bring their own pressures, so the box at the top of the panel is not used: the
       // curve has to start at the highest layer, or the strongest layer would be cut off.
       ipr_name = "oil_multilayer";
+      // a layer with no GOR of its own falls back to the panel's, or to the solution GOR
       const layers = oilLayers(num("water_cut") / 100.0,
                                num("oil_gor") > 0 ? eng("oil_gor") : null);
       ipr_inputs = { pb, layers, crossflow: ticked("oil_crossflow") };
@@ -575,8 +578,17 @@ function layerLines(text) {
 }
 
 /**
- * The oil layer table: the layer's own pressure, its productivity index, and - if the line gives
- * them - its own water cut and GOR.  A line without them falls back to the PVT panel.
+ * The oil layer table.  Each line names its own model first: a `pi` layer is entered by its
+ * productivity index, a `darcy` layer by permeability, thickness and skin, and has its index
+ * worked out from them with the Bo, viscosity, re and rw the layer window holds - exactly as the
+ * Python does it, so the two give the same answer from the same table.
+ *
+ *     pi    <pressure> <PI> <GOR> <water cut %>
+ *     darcy <pressure> <k> <h> <skin> <GOR> <water cut %>
+ *
+ * A GOR of 0 means the solution GOR, and a line that is all numbers is read as the older
+ * `<pressure> <PI> <water cut as a fraction> <GOR>`, so a well remembered in a browser from
+ * before the table existed still opens.
  * @param {number} wc @param {number|null} gor
  * @returns {import("./ipr.js").OilLayer[]}
  */
@@ -584,21 +596,51 @@ function oilLayers(wc, gor) {
   const rows = layerLines(/** @type {HTMLTextAreaElement} */ (el("oil_layers")).value);
   /** @type {import("./ipr.js").OilLayer[]} */
   const layers = [];
-  rows.forEach((parts, i) => {
-    const n = parts.map(Number);
-    if (!(n.length >= 2 && n.every((v) => Number.isFinite(v)))) {
-      if (i === 0) return;                            // a header line, which is not an error
-      throw new Error(`Layer ${layers.length + 1}: need at least a pressure and a productivity `
-        + `index on each line. Read "${parts.join(" ")}".`);
+  for (const parts of rows) {
+    const named = !Number.isFinite(Number(parts[0]));
+    const kind = named ? parts[0].toLowerCase() : "legacy";
+    if (named && kind !== "pi" && kind !== "darcy") continue;        // a heading line
+    const n = (named ? parts.slice(1) : parts).map(Number);
+    const k = layers.length + 1;
+    const want = kind === "darcy" ? 4 : 2;
+    if (!(n.length >= want && n.slice(0, want).every((v) => Number.isFinite(v)))) {
+      throw new Error(`Layer ${k}: expected ${want} numbers`
+        + `${named ? ` after "${parts[0]}"` : ""}, read "${parts.join(" ")}".`);
     }
-    layers.push({ p_res: units.toEngine("pressure", n[0]), J: units.toEngine("pi", n[1]),
-                  wc: n.length > 2 ? n[2] : wc,
-                  gor: n.length > 3 ? units.toEngine("gor", n[3]) : gor });
-  });
+    const p_res = units.toEngine("pressure", n[0]);
+    let J;
+    if (kind === "darcy") {
+      if (!(n[1] > 0 && n[2] > 0)) {
+        throw new Error(`Layer ${k}: permeability and thickness must be above 0.`);
+      }
+      J = ipr.darcy_productivity_index_oil(
+        units.toEngine("permeability", n[1]), units.toEngine("length", n[2]),
+        eng("ml_bo"), eng("ml_mu"), eng("ml_re"), eng("ml_rw"), n[3]);
+    } else {
+      J = units.toEngine("pi", n[1]);
+      if (!(J > 0)) throw new Error(`Layer ${k}: the productivity index must be above 0.`);
+    }
+    // the older all-numbers line put the water cut third, as a fraction, and the GOR fourth
+    const rowGor = kind === "legacy" ? n[3] : n[want];
+    const rowWc = kind === "legacy" ? n[2] : (n[want + 1] ?? NaN) / 100;
+    layers.push({
+      p_res, J,
+      wc: Number.isFinite(rowWc) ? clampFraction(rowWc, k) : wc,
+      gor: Number.isFinite(rowGor) && rowGor > 0 ? units.toEngine("gor", rowGor) : gor,
+    });
+  }
   if (layers.length < 1) {
     throw new Error("Give at least one layer: a pressure and a productivity index.");
   }
   return layers;
+}
+
+/** @param {number} value @param {number} layer */
+function clampFraction(value, layer) {
+  if (!(value >= 0 && value <= 1)) {
+    throw new Error(`Layer ${layer}: the water cut must be between 0 and 100 %.`);
+  }
+  return value;
 }
 
 /**
@@ -2357,7 +2399,10 @@ function openCase(event) {
 // Tabs
 // ---------------------------------------------------------------------
 
-const TABS = [["tab-nodal", "page-nodal"], ["tab-sens", "page-sens"], ["tab-corr", "page-corr"]];
+// A tab is for a view you come back to.  Comparing correlations to a measured survey is a job you
+// do once and close, and it belongs to the VLP correlation section rather than beside the
+// operating point, so it is a window opened from there instead of a third tab.
+const TABS = [["tab-nodal", "page-nodal"], ["tab-sens", "page-sens"]];
 
 /** @param {string} tabId */
 function showTab(tabId) {
@@ -2367,6 +2412,301 @@ function showTab(tabId) {
     const node = document.getElementById(page);
     if (node) node.classList.toggle("on", on);
   }
+}
+
+// =====================================================================
+// Windows, and the tables inside them
+// =====================================================================
+//
+// Three things on this page are tables rather than boxes: the survey, and a layer table for each
+// fluid.  All three are filled in inside a window, and all three write what they hold into a plain
+// text area that stays in the page.  That text is what the rest of the app reads - the survey
+// parser, the layer parsers, what is remembered in this browser, and every check over them - so
+// the table is a way of filling that value in, not a second copy of it to keep in step.
+
+/**
+ * One column of a table that is filled in.
+ * @typedef {{key: string, kind?: "number" | "select", options?: [string, string][],
+ *            value?: string, step?: string, usedBy?: string[]}} Column
+ */
+
+/** @type {Record<string, {columns: Column[], mirror: string, numbered?: boolean,
+ *                         count?: string, noun?: string}>} */
+const TABLES = {
+  "survey-table": {
+    mirror: "survey_text",
+    columns: [{ key: "md", step: "100" }, { key: "tvd", step: "100" }],
+  },
+  "oil-layer-table": {
+    mirror: "oil_layers", numbered: true, count: "oil-layer-count", noun: "layer",
+    columns: [
+      { key: "model", kind: "select", options: [["pi", "PI"], ["darcy", "Darcy"]], value: "pi" },
+      { key: "p", step: "50", value: "3000" },
+      { key: "pi", step: "0.1", value: "1", usedBy: ["pi"] },
+      { key: "k", step: "5", value: "50", usedBy: ["darcy"] },
+      { key: "h", step: "5", value: "50", usedBy: ["darcy"] },
+      { key: "skin", step: "0.5", value: "0", usedBy: ["darcy"] },
+      { key: "gor", step: "50", value: "500" },
+      { key: "wc", step: "5", value: "30" },
+    ],
+  },
+  "gas-layer-table": {
+    mirror: "gas_layers", numbered: true, count: "gas-layer-count", noun: "layer",
+    columns: [
+      { key: "model", kind: "select", value: "jones",
+        options: [["jones", "Jones"], ["darcy", "Darcy"], ["backpressure", "Back pressure"]] },
+      { key: "p", step: "50", value: "3000" },
+      { key: "k", step: "1", value: "5", usedBy: ["jones", "darcy"] },
+      { key: "h", step: "5", value: "30", usedBy: ["jones", "darcy"] },
+      { key: "skin", step: "0.5", value: "0", usedBy: ["jones", "darcy"] },
+      { key: "C", step: "0.001", value: "0.01", usedBy: ["backpressure"] },
+      { key: "n", step: "0.05", value: "0.85", usedBy: ["backpressure"] },
+      { key: "cgr", step: "1", value: "0" },
+      { key: "wgr", step: "1", value: "0" },
+    ],
+  },
+};
+
+/**
+ * The words one row of the mirror text holds, in the order the columns are in.  A row whose first
+ * column is a drop-down writes the chosen model first and then only the cells that model uses, so
+ * the line says what it is: `darcy 3000 50 50 0 500 30`.
+ * @param {HTMLTableRowElement} row @param {string} id
+ */
+function rowWords(row, id) {
+  const spec = TABLES[id];
+  const cells = /** @type {NodeListOf<HTMLInputElement | HTMLSelectElement>} */
+    (row.querySelectorAll("[data-key]"));
+  /** @type {Record<string, string>} */
+  const by = {};
+  for (const cell of cells) by[String(cell.dataset.key)] = cell.value.trim();
+  const model = by.model;
+  return spec.columns
+    .filter((c) => !c.usedBy || (model && c.usedBy.includes(model)))
+    .map((c) => by[c.key])
+    .filter((v) => v !== undefined && v !== "");
+}
+
+// Set while a table is writing its own mirror, so the mirror's own listener can tell that change
+// apart from one made by something else - restoring a remembered well, or Reset - which does have
+// to be carried back into the table.
+let writingMirror = false;
+
+/** Write what the table holds into the text the rest of the app reads. @param {string} id */
+function tableToText(id) {
+  const spec = TABLES[id];
+  const table = document.getElementById(id);
+  const mirror = /** @type {HTMLTextAreaElement} */ (document.getElementById(spec.mirror));
+  if (!table || !mirror) return;
+  const rows = [...table.querySelectorAll("tbody tr")];
+  const lines = rows.map((r) => rowWords(/** @type {HTMLTableRowElement} */ (r), id).join(" "))
+    .filter((line) => line.length > 0);
+  const count = spec.count ? document.getElementById(spec.count) : null;
+  if (count) {
+    // the curve starts at the highest layer, so that is the pressure worth showing without opening
+    const pressures = [...table.querySelectorAll('tbody input[data-key="p"]')]
+      .map((box) => Number(/** @type {HTMLInputElement} */ (box).value))
+      .filter((v) => Number.isFinite(v));
+    count.textContent = `${lines.length} ${spec.noun}${lines.length === 1 ? "" : "s"}`
+      + (pressures.length
+        ? `, the highest at ${show(Math.max(...pressures), 0)} ${units.unitOf("pressure")}` : "");
+  }
+  const next = lines.join("\n");
+  if (next === mirror.value) return;
+  mirror.value = next;
+  writingMirror = true;
+  try {
+    mirror.dispatchEvent(new Event("input", { bubbles: true }));
+  } finally {
+    writingMirror = false;
+  }
+}
+
+/**
+ * Add one row to a table, filled in from `words` if they are given and from the column defaults if
+ * they are not.
+ * @param {string} id @param {string[]} [words]
+ */
+function addRow(id, words) {
+  const spec = TABLES[id];
+  const body = document.querySelector(`#${id} tbody`);
+  if (!body) return;
+  const row = document.createElement("tr");
+  if (spec.numbered) {
+    const n = document.createElement("td");
+    n.className = "n";
+    row.appendChild(n);
+  }
+  // A line that opens with a model name tells the row which cells it uses; one that is all numbers
+  // is an older line, from before the models were offered, and is the first model in the list.
+  const named = words && words.length > 0 && !Number.isFinite(Number(words[0]));
+  const model = named ? String(words[0]).toLowerCase() : spec.columns[0].kind === "select"
+    ? String(spec.columns[0].value) : "";
+  /** @type {string[]} */
+  const rest = words ? (named ? words.slice(1) : words.slice()) : [];
+  let taken = 0;
+  for (const column of spec.columns) {
+    const cell = document.createElement("td");
+    if (column.kind === "select") {
+      const select = document.createElement("select");
+      for (const [value, label] of column.options || []) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        select.appendChild(option);
+      }
+      select.value = model || String(column.value);
+      select.dataset.key = column.key;
+      cell.appendChild(select);
+    } else {
+      const box = document.createElement("input");
+      box.type = "number";
+      box.step = column.step || "any";
+      box.dataset.key = column.key;
+      const used = !column.usedBy || column.usedBy.includes(model);
+      box.value = used && taken < rest.length ? rest[taken] : String(column.value ?? "");
+      if (used && taken < rest.length) taken += 1;
+      cell.appendChild(box);
+    }
+    row.appendChild(cell);
+  }
+  const last = document.createElement("td");
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "del";
+  del.textContent = "\u00d7";
+  del.title = "Remove this row";
+  last.appendChild(del);
+  row.appendChild(last);
+  body.appendChild(row);
+  refreshRow(row, id);
+}
+
+/** Grey out the cells the chosen model does not use, and number the rows. @param {Element} row @param {string} id */
+function refreshRow(row, id) {
+  const spec = TABLES[id];
+  const model = /** @type {HTMLSelectElement | null} */ (row.querySelector('select[data-key="model"]'));
+  for (const column of spec.columns) {
+    if (!column.usedBy) continue;
+    const box = /** @type {HTMLInputElement | null} */
+      (row.querySelector(`input[data-key="${column.key}"]`));
+    if (box) box.disabled = !!model && !column.usedBy.includes(model.value);
+  }
+  const table = document.getElementById(id);
+  if (spec.numbered && table) {
+    [...table.querySelectorAll("tbody tr")].forEach((r, i) => {
+      const n = r.querySelector("td.n");
+      if (n) n.textContent = String(i + 1);
+    });
+  }
+}
+
+/** Fill a table from the text its mirror holds. @param {string} id */
+function textToTable(id) {
+  const spec = TABLES[id];
+  const body = document.querySelector(`#${id} tbody`);
+  const mirror = /** @type {HTMLTextAreaElement | null} */ (document.getElementById(spec.mirror));
+  if (!body || !mirror) return;
+  body.textContent = "";
+  for (const line of mirror.value.split(/\r?\n/)) {
+    const bare = line.split("#")[0];
+    const words = bare.replace(/[,;]/g, " ").split(/\s+/).filter((s) => s.length > 0);
+    if (words.length) addRow(id, words);
+  }
+  if (!body.children.length) addRow(id);
+}
+
+/**
+ * Paste a block out of a spreadsheet into a table: the cell pasted into is the top left of the
+ * block, rows are added if the block runs past the end, and a column that is not a number (a
+ * heading row, say) is left alone.
+ * @param {ClipboardEvent} event @param {string} id
+ */
+function pasteBlock(event, id) {
+  const text = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
+  const grid = text.split(/\r?\n/).map((line) => line.split(/[\t,;]|\s{2,}| /).filter((s) => s.length))
+    .filter((cells) => cells.length);
+  if (grid.length < 2 && (grid[0] || []).length < 2) return;      // one value: let the box have it
+  event.preventDefault();
+  const cell = /** @type {HTMLElement} */ (event.target);
+  const table = document.getElementById(id);
+  const startRow = cell.closest("tr");
+  if (!table || !startRow) return;
+  const body = table.querySelector("tbody");
+  if (!body) return;
+  const columns = [...startRow.querySelectorAll("[data-key]")];
+  const startCol = columns.indexOf(/** @type {Element} */ (cell));
+  let index = [...body.children].indexOf(startRow);
+  for (const cells of grid) {
+    if (cells.every((v) => !Number.isFinite(Number(v)))) continue;   // a heading line
+    while (index >= body.children.length) addRow(id);
+    const target = body.children[index];
+    const boxes = [...target.querySelectorAll("[data-key]")];
+    cells.forEach((value, i) => {
+      const box = /** @type {HTMLInputElement | undefined} */ (boxes[startCol + i]);
+      if (box && Number.isFinite(Number(value))) box.value = value;
+    });
+    index += 1;
+  }
+  tableToText(id);
+}
+
+for (const id of Object.keys(TABLES)) {
+  const table = document.getElementById(id);
+  if (!table) continue;
+  textToTable(id);
+  table.addEventListener("input", (event) => {
+    const row = /** @type {HTMLElement} */ (event.target).closest("tr");
+    if (row) refreshRow(row, id);
+    tableToText(id);
+  });
+  table.addEventListener("click", (event) => {
+    const button = /** @type {HTMLElement} */ (event.target).closest("button.del");
+    if (!button) return;
+    const body = table.querySelector("tbody");
+    const row = button.closest("tr");
+    // never down to nothing: an empty table is a state with no way back out of it
+    if (body && row && body.children.length > 1) {
+      row.remove();
+      const first = body.querySelector("tr");
+      if (first) refreshRow(first, id);
+      tableToText(id);
+    }
+  });
+  table.addEventListener("paste", (event) => pasteBlock(/** @type {ClipboardEvent} */ (event), id));
+  // and the other way: anything that sets the value without going through the table - a remembered
+  // well, Reset, a correction typed somewhere else - has to show up in the table
+  const mirror = document.getElementById(TABLES[id].mirror);
+  if (mirror) {
+    for (const event of ["input", "change"]) {
+      mirror.addEventListener(event, () => { if (!writingMirror) textToTable(id); });
+    }
+  }
+}
+for (const button of document.querySelectorAll("button.addrow")) {
+  button.addEventListener("click", () => {
+    const id = String(/** @type {HTMLElement} */ (button).dataset.adds);
+    addRow(id);
+    tableToText(id);
+  });
+}
+
+// The windows themselves.  Clicking the darkened page behind one closes it, which is what every
+// other window on a computer does.
+for (const button of document.querySelectorAll("button[data-opens]")) {
+  button.addEventListener("click", () => {
+    const node = /** @type {HTMLDialogElement | null} */
+      (document.getElementById(String(/** @type {HTMLElement} */ (button).dataset.opens)));
+    if (!node) return;
+    node.showModal();
+    // the drawing inside is sized from its box, which was not on the screen until just now
+    if (node.id === "dlg-path") drawSketch();
+  });
+}
+for (const node of document.querySelectorAll("dialog")) {
+  node.addEventListener("click", (event) => {
+    if (event.target === node) /** @type {HTMLDialogElement} */ (node).close();
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -2447,6 +2787,8 @@ fillCorrelationChoices();
 fillCorrelationTicks();
 // the well this browser was last working on, if there is one
 const restored = restoreInputs();
+// the tables were built from the starting values; the remembered well replaces those
+for (const id of Object.keys(TABLES)) { textToTable(id); tableToText(id); }
 fillSensitivityChoices();
 fillCorrelationTicks();
 recalculate();

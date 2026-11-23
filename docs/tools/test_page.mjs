@@ -320,8 +320,13 @@ await page.selectOption("#fluid_type", "oil");
 await page.waitForTimeout(250);
 
 // ---- 7b. comparing the correlations with measured data ----
-await page.click("#tab-corr");
+// It belongs to the VLP correlation section rather than beside the operating point, and it is a
+// job done once rather than a view come back to, so it is a window opened from that section.
+check("comparing to measured data is no longer a tab",
+      (await page.$$eval('[role="tab"]', (ns) => ns.map((n) => n.id))).join(",") === "tab-nodal,tab-sens");
+await page.$eval('button[data-opens="dlg-corr"]', (n) => /** @type {HTMLElement} */ (n).click());
 await page.waitForTimeout(150);
+check("it opens in a window instead", await page.$eval("#dlg-corr", (n) => n.open));
 const ticks = await page.$$eval("#vc-corrs input", (ns) => ns.map((n) => n.id));
 check("one tick box per correlation the fluid offers", ticks.length === 7, ticks.join(","));
 check("they all start ticked",
@@ -406,6 +411,9 @@ check("reset puts the multipliers back to 1",
       (await val("gravity_mult")) === "1" && (await val("friction_mult")) === "1");
 await page.selectOption("#correlation", "beggs_brill");
 await page.waitForTimeout(200);
+// the window is modal, so nothing behind it can be reached until it is shut
+await page.$eval("#dlg-corr", (n) => /** @type {HTMLDialogElement} */ (n).close());
+await page.waitForTimeout(150);
 
 // ---- 8. a gas well, right through ----
 await page.click("#tab-nodal");
@@ -591,7 +599,37 @@ for (const [fluid, select] of [["oil", "oil_ipr"], ["gas", "gas_ipr"]]) {
   check(`${fluid} multilayer takes its pressure from the strongest layer`,
         await page.$eval("#p_res", (n) => n.disabled));
 }
+// The layers are filled in as a table in a window, which writes what it holds into the value the
+// rest of the app reads. A Darcy layer is entered by the rock it sits in and has its productivity
+// index worked out from it, exactly as the Python does.
 await setVal("fluid_type", "oil");
+await setVal("oil_ipr", "multilayer");
+await page.waitForTimeout(200);
+await page.$eval('button[data-opens="dlg-oil-layers"]', (n) => /** @type {HTMLElement} */ (n).click());
+await page.waitForTimeout(150);
+check("the layer table opens in a window", await page.$eval("#dlg-oil-layers", (n) => n.open));
+const layerRows = await page.$$eval("#oil-layer-table tbody tr", (rows) => rows.length);
+check("with one row per layer", layerRows === 3, String(layerRows));
+check("a PI layer greys out the cells only a Darcy layer uses",
+      await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="k"]', (n) => n.disabled)
+      && !(await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="pi"]', (n) => n.disabled)));
+await page.$eval('#oil-layer-table tbody tr:first-child select[data-key="model"]', (n) => {
+  /** @type {HTMLSelectElement} */ (n).value = "darcy";
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await page.waitForTimeout(200);
+check("and switching it to Darcy turns them round",
+      !(await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="k"]', (n) => n.disabled))
+      && await page.$eval('#oil-layer-table tbody tr:first-child input[data-key="pi"]', (n) => n.disabled));
+check("the table writes the model into the value the app reads",
+      (await page.$eval("#oil_layers", (n) => n.value)).startsWith("darcy "),
+      await page.$eval("#oil_layers", (n) => n.value.split("\n")[0]));
+await page.$eval("#dlg-oil-layers", (n) => /** @type {HTMLDialogElement} */ (n).close());
+await calcAgain();
+const darcyRate = numberFrom(await results(), "Liquid rate (");
+check("a Darcy layer works out its own productivity index and the well still solves",
+      Number.isFinite(darcyRate) && darcyRate > 0, `${darcyRate} - ${await noteText()}`);
+
 await setVal("oil_ipr", "pi");
 check("and the pressure box comes back for a single-layer model",
       !(await page.$eval("#p_res", (n) => n.disabled)));
