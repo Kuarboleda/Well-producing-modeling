@@ -300,7 +300,7 @@ for (const want of ["Swab valve", "Production wing valve", "Upper master valve",
 }
 check("the only text on the drawing is the depth scale and the lift gas inlet",
       (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
-        .every((s) => s.startsWith("lift gas in")));
+        .every((s) => s.startsWith("Lift gas")));
 check("the fluid is drawn as particles",
       (await page.$$eval("#flow-svg #wv-fluid circle", (ns) => ns.length)) > 20);
 check("fluid enters through the perforations",
@@ -358,7 +358,7 @@ check("the side pocket mandrel is drawn",
       (await page.$$eval("#wv-glvalve", (ns) => ns.length)) === 1);
 check("the lift gas inlet reads ON", (await tips()).some((s) => s.startsWith("Annulus wing valve"))
       && (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
-        .includes("lift gas in: ON"));
+        .includes("Lift gas: ON"));
 check("and the inlet sits above the 0 ft line, on the wellhead",
       await page.evaluate(() => {
         const svg = document.querySelector("#flow-svg");
@@ -514,6 +514,90 @@ await setVal("p_res", "3000");
 await page.waitForTimeout(250);
 await calc();
 
+// ---- the drawing is straight down, whatever the survey says ----
+// It is read against the pressure and temperature profile beside it, which has depth on one axis
+// and nothing else, so a well drawn leaning carries its perforations away from the formation and
+// makes the one thing the two panels share - a depth - harder to read.
+await page.selectOption("#survey_mode", "deviated");
+await page.waitForTimeout(250);
+await calc();
+const spine = await page.evaluate(() => {
+  const box = document.querySelector("#wv-bore")?.getBoundingClientRect();
+  const perf = [...document.querySelectorAll('line[stroke="#7c3f1d"]')]
+    .map((n) => n.getBoundingClientRect());
+  return { wide: box ? box.width : 0, perfSpread: perf.length
+    ? Math.max(...perf.map((r) => r.right)) - Math.min(...perf.map((r) => r.left)) : 0 };
+});
+// the bore is a stroked path, so its geometry is the centre line: dead straight down means its
+// own bounding box has no width at all
+check("a deviated well is still drawn as one straight column",
+      spine.wide < 2, `centre line wanders ${spine.wide.toFixed(1)}px`);
+check("so the perforations stay under the well rather than wandering off sideways",
+      spine.perfSpread > 0 && spine.perfSpread < 220, `${spine.perfSpread.toFixed(0)}px across`);
+check("and the caption says it is deviated, with the MD and the TVD",
+      (await page.$$eval("#flow-svg text", (ns) => ns.map((n) => n.textContent || "")))
+        .some((s) => /Deviated:.*MD.*TVD/.test(s)));
+await page.selectOption("#survey_mode", "vertical");
+await page.waitForTimeout(200);
+await calc();
+
+// ---- the Christmas tree, and what is allowed to reach it ----
+// The swab is shut, so the stream turns out at the tee and the pipe above it is dead; and a valve
+// symbol is the one thing on the drawing that must never have fluid drawn across it.
+const tree = await page.evaluate(() => {
+  const wing = document.querySelector("#wv-wing")?.getBoundingClientRect();
+  const kids = [...document.querySelector("#flow-svg").children];
+  const fluid = [...document.querySelectorAll("#wv-fluid > *")];
+  return {
+    aboveTee: fluid.filter((n) => n.getBoundingClientRect().bottom < (wing?.top ?? 0) - 2).length,
+    valvesLast: kids[kids.length - 1].id,
+    armFill: document.querySelector("#wv-armbore")?.getAttribute("opacity"),
+    outside: fluid.filter((n) => {
+      const arrow = document.querySelector("#wv-outflow")?.getBoundingClientRect();
+      return arrow && n.getBoundingClientRect().left > arrow.left - 2;
+    }).length,
+  };
+});
+check("nothing is drawn above the tee, where the swab valve is shut", tree.aboveTee === 0,
+      `${tree.aboveTee} shapes`);
+check("the tree valves are painted over the fluid, not under it",
+      tree.valvesLast === "wv-tree-valves", tree.valvesLast);
+check("the flowline is the same pale wash as the tubing", Number(tree.armFill) < 0.2,
+      String(tree.armFill));
+check("and nothing leaves the pipe before the outlet arrow", tree.outside === 0,
+      `${tree.outside} shapes`);
+
+// ---- slug flow: liquid BETWEEN the Taylor bubbles ----
+// A drop of oil inside a Taylor bubble is not slug flow, it is a drawing mistake.  The bubbles and
+// the liquid between them are placed, not scattered, and travel at one speed so they stay put
+// relative to each other; this watches several frames because the old version only went wrong
+// after the shapes had been moving for a while.
+let insideGas = 0;
+for (let frame = 0; frame < 10; frame++) {
+  await page.waitForTimeout(160);
+  insideGas = Math.max(insideGas, await page.evaluate(() => {
+    const kids = [...document.querySelector("#wv-fluid").children];
+    const bubbles = kids.map((e, i) => ({ i, e })).filter((x) => x.e.matches("path[data-gas]"));
+    if (!bubbles.length) return 0;
+    const slugBand = bubbles[bubbles.length - 1].i;      // the band's own drops come after it
+    let bad = 0;
+    kids.forEach((e, i) => {
+      if (i > slugBand + 30) return;                     // a later band's drops are not this band's
+      if (!["#008000", "#0000FF"].includes(e.getAttribute("fill") || "")) return;
+      const d = e.getBoundingClientRect();
+      const cx = (d.left + d.right) / 2, cy = (d.top + d.bottom) / 2;
+      if (bubbles.some(({ e: t }) => {
+        const r = t.getBoundingClientRect();
+        return cx > r.left && cx < r.right && cy > r.top && cy < r.bottom;
+      })) bad += 1;
+    });
+    return bad;
+  }));
+}
+check("no oil or water is drawn inside a Taylor bubble", insideGas === 0, `${insideGas} drops`);
+check("and the bubbles are carried lighter than the drops",
+      Number(await page.$eval("#wv-fluid path[data-gas]", (n) => n.getAttribute("opacity"))) < 0.8);
+
 // The depth scales of the two panels must line up: a depth on the profile has to be at the same
 // height on the drawing beside it, which is the whole reason they share a top and bottom padding.
 const lineup = await page.evaluate(() => {
@@ -559,7 +643,7 @@ check("with gas lift off there is no gas anywhere in the annulus",
 // changed rather than two different drawings
 check("but the inlet is still drawn, shut", off.wing
       && (await page.$$eval("#flow-svg text.wv-lbl", (ns) => ns.map((n) => n.textContent)))
-        .includes("lift gas in: OFF"));
+        .includes("Lift gas: OFF"));
 check("and dead fluid stands the whole way down to the packer",
       Boolean(off.dead) && Math.abs(off.dead[1] - off.packerY) < 22, JSON.stringify(off));
 

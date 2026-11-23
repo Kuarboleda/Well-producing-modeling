@@ -69,6 +69,22 @@ highest layer. What the well produces is then the mixture at the rate it settled
 what the PVT panel says - so the rates across the top, and the fluid moving in the drawing, are
 taken from that mixture.
 
+**The drawing is straight down, whatever the survey says.** It is read against the pressure and
+temperature profile beside it, which has depth on one axis and nothing else; a well drawn leaning
+carries its perforations off sideways and away from the formation, and makes the one thing the two
+panels share - a depth - harder to read. A measured depth still lands at its own TVD, so every
+feature is at the right height; only the sideways travel is dropped, and a deviated well says so
+under the drawing with its MD and TVD.
+
+The stream turns out of the tee, so the tubing above it is dead - the swab valve is shut - and
+nothing is drawn standing in it. The tree valves are painted last, over the fluid, each an opaque
+white circle, so a drop never crosses a valve symbol. In slug flow the Taylor bubbles are placed
+evenly and the liquid slugs are laid in the gaps between them, all travelling at one speed, so the
+oil and water stay between the bubbles instead of riding through them; the gap is worked out from
+the bubble size and the spacing rather than guessed. The first gas bubbles appear at the depth
+where the flowing pressure crosses the bubble point, read off the same traverse the profile is
+plotted from, so the two panels agree on where the gas comes out.
+
 **Colour.** Oil green, water blue, gas red, total liquid black, GOR orange, water cut cyan - the
 surveillance convention, so a colour means the same thing on every chart, in the drawing and in the
 rates across the top of the page. `colours.js` holds the only copy: `FLUID_COLORS` gives each fluid

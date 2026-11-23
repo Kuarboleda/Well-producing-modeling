@@ -1535,6 +1535,30 @@ window.addEventListener("resize", () => {
 });
 
 /**
+ * The measured depth at which the flowing pressure passes the bubble point, or null when it never
+ * does - a gas well, a model that carries no bubble point, or an oil column that stays above the
+ * bubble point the whole way up.  The crossing is found by walking the traverse and interpolating
+ * between the two steps that straddle it.
+ * @param {Case} c @param {any} tr
+ * @returns {number|null}
+ */
+function bubbleDepth(c, tr) {
+  if (c.fluid_type !== "oil" || !tr || !tr.md || !tr.p) return null;
+  const pb = Number(c.ipr_inputs?.pb);
+  if (!(pb > 0)) return null;
+  for (let i = 1; i < tr.md.length; i++) {
+    const a = tr.p[i - 1];
+    const b = tr.p[i];
+    if ((a - pb) * (b - pb) > 0) continue;              // both on the same side of it
+    const f = Math.abs(b - a) > 1e-9 ? (pb - a) / (b - a) : 0;
+    return tr.md[i - 1] + f * (tr.md[i] - tr.md[i - 1]);
+  }
+  // it never crosses: either the whole column is below the bubble point, and gas is breaking out
+  // all the way from the perforations, or none of it is and there is no free gas anywhere
+  return Math.max(...tr.p) < pb ? 0 : null;
+}
+
+/**
  * Draw the well, and set the fluid moving at the rate that was found.
  * @param {Case} c @param {any} tr the traverse, or null when nothing has been solved yet
  * @param {number} rate STB/d or Mscf/d, 0 when the well is not flowing
@@ -1588,6 +1612,11 @@ function drawWell(c, tr, rate, patternFrom = "", borrowed = false) {
     lengthUnit: units.unitOf("length"),
     toShown: (ft) => units.fromEngine("length", ft),
     pattern: tr ? { md: tr.md, regime: tr.regime } : null,
+    // Where the pressure down the tubing crosses the bubble point: above it the gas is out of
+    // solution and there is something to draw, below it the oil is undersaturated and there is
+    // not.  Read off the same traverse the profile beside the drawing is plotted from, so the
+    // first bubbles are at the same depth on both panels.
+    bubbleMd: bubbleDepth(c, tr),
     // Below the bubble point the gas is already out of solution in the rock, so it arrives at the
     // perforations as free gas; a gas well obviously brings gas in whatever the pressure.
     freeGasIn: !isOil || (Number(c.ipr_inputs?.pb) > 0 && c.p_res < Number(c.ipr_inputs.pb)),
